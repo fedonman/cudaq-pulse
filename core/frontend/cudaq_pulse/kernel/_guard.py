@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import builtins
 import copy
+import keyword
 import types
 import weakref
 from itertools import compress
@@ -43,6 +44,13 @@ if TYPE_CHECKING:
 
 _IMMUTABLE = (int, float, complex, str, bytes, bool, types.NoneType, range)
 _SNAPSHOT = (list, dict, set, bytearray)
+_CODE_LIKE = (
+    type,
+    types.ModuleType,
+    types.FunctionType,
+    types.MethodType,
+    types.BuiltinFunctionType,
+)
 _MAX_HELPER_DEPTH = 8
 
 
@@ -343,12 +351,68 @@ class Guard:
         self.registers = registers
 
 
+def _attributes(value: Any) -> list[str]:
+    """The attributes to compare of an object a kernel was passed and is
+    cached for by identity: a dataclass's fields, else what its ``__dict__``
+    holds; none for a class, module or function, or cudaq_pulse's own."""
+    cls = type(value)
+    if isinstance(value, _CODE_LIKE) or cls.__module__.partition(".")[0] == "cudaq_pulse":
+        return []
+    fields = getattr(cls, "__dataclass_fields__", None)
+    if fields is None:
+        fields = getattr(value, "__dict__", None)
+        if not isinstance(fields, dict):
+            return []
+    return [name for name in fields if name.isidentifier() and not keyword.iskeyword(name)]
+
+
+def _pin(plan: list[tuple[Any, ...]], pinned: Collection[Any], registers: int) -> int:
+    """Append to *plan* the steps that compare the *pinned* arguments: each
+    as a global's value is compared, then by its attributes (``_attributes``).
+    Returns the number of registers the plan uses from then on."""
+    seen: set[int] = set()
+
+    def pin(value: Any, source: int, a: Any, b: Any, depth: int) -> None:
+        nonlocal registers
+        if _immutable(value):
+            plan.append((source, a, b, -1, _EQUAL_VALUE, value, None))
+            return
+        if isinstance(value, (types.MethodType, types.BuiltinMethodType)):
+            plan.append((source, a, b, -1, _EQUAL_METHOD, value, None))
+            return
+        snap = _snapshot(value)
+        names = (
+            []
+            if snap is not None or id(value) in seen or depth > _MAX_HELPER_DEPTH
+            else _attributes(value)
+        )
+        if snap is None and not names and source == _GLOBAL:
+            return  # Only its identity, which the cache key holds.
+        register = -1
+        if names:
+            seen.add(id(value))
+            register = registers
+            registers += 1
+        plan.append((source, a, b, register, _SAME_OBJECT, value, snap))
+        for name in names:
+            try:
+                attribute = getattr(value, name)
+            except Exception:
+                continue
+            pin(attribute, _ATTR, register, name, depth + 1)
+
+    for value in pinned:
+        pin(value, _GLOBAL, (value,), 0, 0)
+    return registers
+
+
 def build_guard(
     fn: types.FunctionType,
     *,
     impure: bool = False,
     dict_items: Mapping[tuple[int, Any], tuple[dict[Any, Any], Any, Any]] | None = None,
     dict_whole: Collection[int] = (),
+    pinned: Collection[Any] = (),
 ) -> Guard:
     """The guard for *fn*, from the values its reads have right now.
 
@@ -357,6 +421,9 @@ def build_guard(
     are the dict items the trace read, ``(id(dict), key) -> (dict, key,
     value)``, and *dict_whole* the ids of the dicts it iterated or tested
     with ``in``; without *dict_items* every dict is compared whole.
+    *pinned* are the arguments the trace's cache entry is kept for by
+    identity (a NumPy array, a dataclass): the guard compares a copy of
+    each one's contents, or its attributes, so a change in place is seen.
     """
     if impure:
         return Guard(_always_false, 0, True, (), 0)
@@ -486,7 +553,10 @@ def build_guard(
         else:
             snap = _item_snapshot(value) if item else _snapshot(value)
             plan.append((source, a, b, kept, _SAME_OBJECT, value, snap))
-    guard = Guard(_always_false, len(slots), False, tuple(plan), max(parents, default=-1) + 1)
+    registers = max(parents, default=-1) + 1
+    if pinned:
+        registers = _pin(plan, pinned, registers)
+    guard = Guard(_always_false, len(slots), False, tuple(plan), registers)
     steps = guard.plan
     ref = weakref.ref(guard)
 

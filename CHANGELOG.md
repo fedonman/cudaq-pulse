@@ -385,6 +385,13 @@ release's `## [X.Y.Z] - Unreleased`, in the pull request that makes it.
 
 ### Fixed
 
+- **A static argument changed in place now compiles the kernel again.** A
+  kernel was cached for a NumPy array, a dataclass or another object passed
+  to a static parameter by the object itself, so after `amps[:] = new` or
+  `p.amplitude = 0.5` the next call ran the program traced for the old
+  contents, with no error. The cache now keeps a copy of such an argument's
+  contents, or of its attributes, and compares it on every call, as it does
+  for the globals a kernel reads.
 - **A kernel with many measurement-conditioned `if`s no longer takes memory
   and time that grow with the square of their number to trace.** Each `if`
   kept its own copy of the whole kernel's instructions, so a kernel of n

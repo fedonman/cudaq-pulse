@@ -307,6 +307,42 @@ def test_a_changed_closure_cell_is_seen_on_the_next_call():
     assert "3.000000e-01" in k.lower(q).mlir()
 
 
+@dataclasses.dataclass
+class _Pulse:
+    amplitude: float
+    durations: np.ndarray
+
+
+class _Settings:
+    def __init__(self, scale):
+        self.scale = scale
+
+
+@pulse.kernel
+def plays_its_arguments(q, p, s, amplitudes):
+    d = get_drive_line(q)
+    drive(d, square(int(p.durations[0]), p.amplitude * s.scale))
+    for a in amplitudes:
+        drive(d, square(8, float(a)))
+
+
+def test_an_argument_changed_in_place_is_seen_on_the_next_call():
+    q = _device().qudits[0]
+    p, s, amplitudes = _Pulse(0.25, np.array([40])), _Settings(0.5), np.array([0.1, 0.2])
+    first = plays_its_arguments.lower(q, p, s, amplitudes)
+    for _ in range(3):  # the last once the guard runs as generated code
+        assert plays_its_arguments.lower(q, p, s, amplitudes) is first
+    p.amplitude = 0.5
+    assert "2.500000e-01" in plays_its_arguments.lower(q, p, s, amplitudes).mlir()
+    p.durations[0] = 16
+    assert plays_its_arguments.lower(q, p, s, amplitudes).schedule[0].duration_cycles == 16
+    s.scale = 0.75
+    assert "3.750000e-01" in plays_its_arguments.lower(q, p, s, amplitudes).mlir()
+    amplitudes[:] = [0.3, 0.4]
+    assert "4.000000e-01" in plays_its_arguments.lower(q, p, s, amplitudes).mlir()
+    assert plays_its_arguments.cache_info().compiled == 5
+
+
 def test_a_trace_that_calls_an_impure_host_function_is_never_reused():
     @pulse.kernel
     def k(q):

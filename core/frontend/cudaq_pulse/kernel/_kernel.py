@@ -201,6 +201,32 @@ def _static_key(value: Any) -> Any:
     return (t, value)
 
 
+# The types of the static arguments _static_key keys by value alone.
+_BY_VALUE = frozenset({Qudit, Register, int, bool, float, str, complex, type(None)})
+
+
+def _keyed_by_identity(value: Any, found: list[Any]) -> list[Any]:
+    """The values in the static argument *value* that ``_static_key`` keys by
+    identity (unhashable, or compared by identity), added to *found*:
+    changed in place, they keep their key, and the guard compares them."""
+    t = type(value)
+    if t in (tuple, list):
+        for v in value:
+            _keyed_by_identity(v, found)
+    elif t is dict:
+        for v in value.values():
+            _keyed_by_identity(v, found)
+    elif t not in _BY_VALUE:
+        try:
+            hash(value)
+        except TypeError:
+            found.append(value)
+        else:
+            if t.__eq__ is object.__eq__:  # type: ignore[comparison-overlap]
+                found.append(value)
+    return found
+
+
 # ── Return values ────────────────────────────────────────────────────────
 
 
@@ -835,13 +861,14 @@ class Kernel[**P]:
             if promoted:
                 _warn_static(self.__name__, [names[i] for i in promoted], operation, where)
         returns = _return_spec(builder.returned, builder.readouts, self.__name__)
+        pins = tuple(values[i] for i in static)
         guard = build_guard(
             fn,
             impure=builder.impure,
             dict_items=builder.dict_items,
             dict_whole=builder.dict_whole,
+            pinned=() if _BY_VALUE.issuperset(map(type, pins)) else _keyed_by_identity(pins, []),
         )
-        pins = tuple(values[i] for i in static)
         entry = _Entry(lowered, guard, returns, pins, runtime)
         if options.machine._line_delays and lowered.scheduled:
             # Only a kept entry is scheduled again, for its qudits.

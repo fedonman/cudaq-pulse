@@ -100,6 +100,9 @@ while it compiled (module globals, closure cells, attribute chains such as
 every call, and a change compiles the kernel again. A kernel that calls a
 host function whose result can change between calls (``random.random()``)
 compiles on every call.
+A static argument changed in place, such as a NumPy array (``amps[:] = new``)
+or an attribute of a dataclass or other object (``p.amplitude = 0.5``),
+also compiles the kernel again on the next call.
 
 ``pulse.compile``
 -----------------
