@@ -700,6 +700,16 @@ release's `## [X.Y.Z] - Unreleased`, in the pull request that makes it.
   which are found as before: an export that lists each event's segment
   still visits every iteration.
 
+- **A change inside a global tuple compiles the kernel again, and a global
+  list of arrays no longer compiles it on every call.** The cache compared a
+  global tuple or NamedTuple by identity alone, so changing a list, dict or
+  array it holds in place (`PAIR[0][0] = 0.2`) left the old program in use,
+  with no error. It now compares a copy of the tuple's contents, as it does
+  for a list. A list or dict that holds NumPy arrays was compared with `==`,
+  which raises for arrays, so it never compared equal and the kernel
+  compiled again on every call; such containers are now compared item by
+  item.
+
 - **A value computed through very many operations no longer ends the
   process.** Several walks over what a value is computed from, or over what
   it reaches, called themselves once per operation: a run-time selected

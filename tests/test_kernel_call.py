@@ -12,6 +12,7 @@ import subprocess
 import sys
 import textwrap
 from pathlib import Path
+from typing import NamedTuple
 
 import cudaq_pulse as pulse
 import numpy as np
@@ -256,6 +257,66 @@ def test_a_dict_used_whole_is_guarded_whole(kernel, change):
     finally:
         SCALES.clear()
         SCALES.update(a=0.5, b=0.25)
+
+
+class _Tables(NamedTuple):
+    amplitudes: np.ndarray
+    widths: dict[str, int]
+
+
+PAIR = ([0.1], [40])
+TABLES = _Tables(np.array([0.1, 0.3]), {"x": 40})
+ARRAYS = [np.linspace(0.05, 0.15, 8)]
+
+
+@pulse.kernel
+def reads_a_tuple_of_lists(q):
+    drive(get_drive_line(q), square(PAIR[1][0], PAIR[0][0]))
+
+
+@pulse.kernel
+def reads_a_namedtuple_by_index(q):
+    drive(get_drive_line(q), square(TABLES[1]["x"], TABLES[0][0]))
+
+
+@pulse.kernel
+def reads_a_list_of_arrays(q):
+    drive(get_drive_line(q), square(40, ARRAYS[0][0]))
+
+
+@pytest.mark.parametrize(
+    ("kernel", "amplitudes", "widths", "key"),
+    [
+        (reads_a_tuple_of_lists, PAIR[0], PAIR[1], 0),
+        (reads_a_namedtuple_by_index, TABLES.amplitudes, TABLES.widths, "x"),
+    ],
+    ids=["tuple of lists", "NamedTuple of an array and a dict"],
+)
+def test_a_change_inside_a_global_tuple_is_seen_on_the_next_call(kernel, amplitudes, widths, key):
+    q = _device().qudits[0]
+    first = kernel.lower(q)
+    assert kernel.lower(q) is first
+    try:
+        amplitudes[0] = 0.2
+        widths[key] = 16
+        second = kernel.lower(q)
+        assert "2.000000e-01" in second.mlir()
+        assert second.schedule[0].duration_cycles == 16
+    finally:
+        amplitudes[0] = 0.1
+        widths[key] = 40
+
+
+def test_a_global_list_of_arrays_is_cached_until_an_array_changes():
+    q = _device().qudits[0]
+    first = reads_a_list_of_arrays.lower(q)
+    for _ in range(5):
+        assert reads_a_list_of_arrays.lower(q) is first
+    try:
+        ARRAYS[0][0] = 0.2
+        assert "2.000000e-01" in reads_a_list_of_arrays.lower(q).mlir()
+    finally:
+        ARRAYS[0][0] = 0.05
 
 
 class _Pulses:

@@ -42,7 +42,7 @@ if TYPE_CHECKING:
     _CODE_LOCK: threading.Lock
 
 _IMMUTABLE = (int, float, complex, str, bytes, bool, types.NoneType, range)
-_SNAPSHOT = (list, dict, set, bytearray)
+_SNAPSHOT = (list, dict, set, bytearray, tuple, frozenset)
 _MAX_HELPER_DEPTH = 8
 
 
@@ -59,12 +59,17 @@ def _immutable(value: Any) -> bool:
 
 
 # A copy to compare a mutable container's contents against, or None.
+# A tuple here holds a mutable value, such as a list; its copy is kept
+# only if it compares equal, which one of objects without ``__eq__`` does not.
 def _snapshot(value: Any) -> Any | None:
     if isinstance(value, _SNAPSHOT):
         try:
-            return copy.deepcopy(value)
+            snap = copy.deepcopy(value)
         except Exception:
             return None
+        if isinstance(value, (tuple, frozenset)) and not _same_contents(value, snap):
+            return None
+        return snap
     if type(value).__module__ == "numpy" and type(value).__name__ == "ndarray":
         return value.copy()
     return None
@@ -95,7 +100,19 @@ def _same_contents(value: Any, snapshot: Any) -> bool:
     try:
         return bool(value == snapshot)
     except Exception:
-        return False
+        return _same_items(value, snapshot)
+
+
+# Whether the containers *value* and *snapshot*, which ``==`` cannot compare
+# (a list of arrays), hold the same contents, compared item by item.
+def _same_items(value: Any, snapshot: Any) -> bool:
+    if isinstance(value, (list, tuple)):
+        return len(value) == len(snapshot) and all(map(_same_contents, value, snapshot))
+    if isinstance(value, dict):
+        return value.keys() == snapshot.keys() and all(
+            _same_contents(item, snapshot[key]) for key, item in value.items()
+        )
+    return False
 
 
 # What finding reads and generating checks use is made when the first guard
