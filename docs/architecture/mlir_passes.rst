@@ -34,6 +34,24 @@ schedule of its policy. Each member is one pass:
 The default, ``DEFAULT_PASSES``, is ``VERIFY``, ``FOLD_CONSTANTS``,
 ``REMOVE_UNUSED``, ``FOLD_PHASES`` and ``FUSE_PULSES``.
 
+Idle replacement (:ref:`idle replacement <idle-replacement>`) is no pass
+of ``cudaq-pulse-opt``: the idle windows exist only once the program is
+scheduled, and what replaces them is a kernel, traced like any other.
+``compiled.replace_idle(rule)`` compiles the program, reads its schedule,
+traces the kernel again with the fills written at the statements around
+each gap, and compiles that. To read the schedule per traced operation, its
+trace writes the number of each drive, readout, wait, sync and frame change
+into the packed buffer right after the operation (a site record, which a
+trace without idle replacement never writes), and the module is built with
+each number as the operation's location, which no pass reads and the
+printed module does not show; the numbered program compiles as the program
+without numbers. An operation written into a window also carries the
+attribute ``pulse.written`` until the numbers are removed:
+``pulse-merge-waits`` does not merge a written wait and
+``pulse-fuse-pulses`` does not fuse a written drive with one of the
+kernel's (two written drives fuse into a written one), so the kernel's
+operations stay the ones the two schedules are compared by.
+
 Optimization passes
 -------------------
 

@@ -58,6 +58,67 @@ that order, and the rest by keyword. ``anharmonicity_hz`` is left out where
 a qudit has none to give; a transmon of more than two levels needs it, and
 compiling or simulating one without it is an error naming the qudit.
 
+A system that does not state its qudits' frequencies gives them in one of
+two other ways, and ``qs.frequency_frame`` says which (``"absolute"`` for a
+system with frequencies):
+
+- **Offsets from a shared reference** (``"shared_reference"``):
+  ``PhysicalQudit(1, Offset(1.5e8), 50.0, 30.0)`` is 150 MHz above the qudit
+  at ``Offset(0.0)``. ``Offset`` (``cudaq_pulse.quantum_systems``) is a
+  ``float`` that says what it is measured from; an offset may be 0 or
+  negative. Every difference of two frequencies is known, so couplings, a
+  drive at another qudit's tone and everything else compute as on the same
+  system with frequencies, and every frequency of its programs is an offset
+  from that reference: a line's tone starts at its qudit's offset, and the
+  exports give offsets.
+- **Each qudit's own carrier** (``"own_carrier"``):
+  ``PhysicalQudit(0, None, 50.0, 30.0)`` leaves the frequency out, for a
+  control stack that owns the carriers and takes offsets only. A line's
+  tone is at 0 Hz, ``set_frequency(tone, 1e6)`` puts it 1 MHz above its
+  qudit, and the exports give 0 Hz as each line's ``native_frequency_hz``.
+  Such a system declares no ``couplings`` (a coupling acts by the
+  difference of its qudits' frequencies; an interaction is given as a
+  number, ``residual_zz``), and a drive at another qudit's tone is an
+  error naming the two qudits.
+
+A system's qudits give their frequencies all one way; 0 Hz is not a
+frequency. A system file holds an offset as ``{"offset_hz": 1.5e8}`` and a
+missing frequency as ``null``. Either kind of program schedules, exports
+and simulates as that of the same system with frequencies does, less the
+reference. ``frequency_hz`` reads what the qudit was given (an ``Offset``,
+or ``None``, where the type says ``float``); ``qs.qudit_freq`` and
+``qs.frequencies`` are plain numbers, the offset or 0. An ``Offset`` equals
+and is ordered against another ``Offset`` only: ``offset == 1.5e8`` is
+false and ``offset < 1.5e8`` is an ``InvalidTypeError`` (a ``TypeError``),
+as for a ``str`` and a number; ``float(offset)`` is the number.
+
+What needs a frequency such a system does not state is refused, each with
+an error that says so:
+
+- a readout's ``frequency_hz`` that is not an offset from the same
+  reference: on a ``"shared_reference"`` system it is given as
+  ``DispersiveReadout(frequency_hz=Offset(2.0e9))``, and a plain number is
+  refused; an ``"own_carrier"`` system takes none. Without one, a readout
+  line plays at its qudit's own tone: on an ``"own_carrier"`` system that
+  is 0 Hz from the qudit's carrier. An ``Offset`` readout frequency on a
+  system whose qudits give their frequencies in Hz is refused too, when
+  the system's first program compiles;
+- ``simulate(program, quantum_system=other)`` when ``other.frequency_frame``
+  is not that of the system the program was compiled for;
+- a ``Calibration`` of a system with couplings, which computes each
+  coupling's exchange at its qudits' absolute frequencies;
+- parameter drift.
+
+On an ``"own_carrier"`` system a line several qudits share counts each
+qudit's tones apart (``max_frequencies_per_line``): a tone there is a qudit
+and an offset from its carrier, so three qudits' own tones, each 0 Hz, are
+three frequencies.
+
+``qs.transition_freq[q, i, j]`` is the upper level's energy less the
+lower's, as ``line.tones`` and ``qs.model.transitions_hz(qudit, levels)``
+give it: where frequencies are offsets it keeps its sign (a 1-2 tone is
+its anharmonicity below the 0-1 tone).
+
 A coupling's ``strength_hz`` is g / 2 pi; ``None`` says it is not measured
 yet, and such a system compiles, schedules and exports while
 ``pulse.simulate`` refuses it, naming the coupling. ``residual_zz`` lists

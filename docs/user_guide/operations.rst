@@ -105,6 +105,16 @@ In the qudit's frame, which rotates at its 0-1 frequency, a tone at
 its frame. The 1-2 transition of a transmon is driven resonantly by a tone at
 ``w_q + alpha``.
 
+.. themed-figure:: figures/frame_phase.svg
+   :alt: The phase of a drive tone's frame against time, above the three X90 pulses that take it. A shift_phase of π/2 at 40 ns is a step; a shift_frequency of +2.5 MHz at 80 ns makes the phase rise steadily from there. The phase each pulse starts with: 0 for the pulse from 0 ns, π/2 for the pulse from 40 ns, π for the pulse from 180 ns. Each pulse's small Q quadrature is drawn dashed.
+   :width: 100%
+
+   A frame over three X90 pulses: ``shift_phase(tone, pi / 2)`` after the
+   first, and ``shift_frequency(tone, 2.5e6)`` and a 100 ns wait after the
+   second. A phase shift is a step and a frequency shift a slope; each
+   pulse takes the phase the frame has when it starts. Dashed blue is a
+   pulse's Q quadrature.
+
 .. _virtual-z:
 
 Phase frames and virtual Z gates
@@ -211,8 +221,9 @@ frame (see :ref:`conventions-frames`).
 
       <div class="pulse-waveform-explorer" data-shape="drag"></div>
 
-.. figure:: figures/waveform_envelopes.svg
+.. themed-figure:: figures/waveform_envelopes.svg
    :figclass: pwe-fallback
+   :width: 100%
    :alt: The I and Q envelopes of gaussian, drag, cosine, tanh_ramp,
          gaussian_square and square, each 40 clock cycles long.
 

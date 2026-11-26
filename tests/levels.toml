@@ -1,0 +1,198 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# The level of each test that is not at level 1 (CONTRIBUTING.md, "Test
+# levels"). `pytest --level N` runs the tests of level N and lower;
+# `pytest --level-report` prints what this table and the markers add up to.
+#
+# A key is a test file; or `file::test`, or `file::test[parameter id]`, where
+# `*` stands for any characters (a `*` itself cannot be asked for) and a test
+# in a class is `Class::test`. The value is the reason, in one line. For one
+# test the closest entry counts: its parameters, then the test, then its
+# file; and of two as close, the one written without `*`. A file not named
+# here is at level 1, and a [level1.tests] entry keeps a test at level 1 in a
+# file that is not.
+#
+# A `level0` .. `level3` marker on a test, or a `pytestmark` in its file,
+# counts before this table; when a file gets markers, its entries here go.
+# tests/test_levels.py fails on an entry that names no test, on a test that
+# has both a marker and an entry, and on a level 0 that grew past its cap.
+
+# Level 0, contract: a failure means a wrong result for a user (schedule, IR,
+# export, physics) or a broken written promise (public names, a shipped
+# example runs, every Python version traces to the same IR). Fast, explicit.
+
+[level0.files]
+# The right schedule and the right IR.
+"tests/test_e2e.py" = "a kernel through the whole pipeline: compiled, scheduled, lowered to the LLVM dialect"
+"tests/test_semantic_regressions.py" = "wrong results at the public API that were fixed: placement, specialization, kept branches"
+"tests/kernel/test_frontend_regressions.py" = "wrong traces of the kernel frontend that were fixed"
+"tests/kernel/test_packed_parity.py" = "compile() builds the same program as the kernel IR, for the whole corpus"
+"tests/test_workloads.py" = "the six workload programs compile and schedule; the correct corpus compiles"
+"tests/classical/test_no_call_identity.py" = "a program without classical calls compiles to the op counts it had before calls existed"
+"tests/test_frame_semantics.py" = "the frame rules of the dialect docs, read back from the export's frequency and phase per event"
+"tests/test_conventions.py" = "the documented units, time bases and signs, one test per rule of the conventions page"
+# The same result on every Python version.
+"tests/kernel/test_ir_golden.py" = "every supported Python version traces the corpus to the same checked-in IR"
+# The right export.
+"tests/classical/test_wire_format.py" = "the wire format is the real-time protocol other software reads"
+# The right physics.
+"tests/physics/test_coupling.py" = "exchange, the 11-20 chevron and static ZZ against reference values"
+"tests/physics/test_dissipation.py" = "T1 and T2 of a qubit and a qutrit against reference values"
+"tests/physics/test_drag.py" = "DRAG leakage against beta, against reference values"
+"tests/physics/test_signs.py" = "sign conventions of detuning, the 1-2 transition, cross resonance and shift_phase"
+"tests/physics/test_single_qudit.py" = "resonant and detuned Rabi, Ramsey and Hahn echo against analytic values"
+"tests/physics/test_thermal.py" = "thermal populations and echo dephasing against detailed balance"
+"tests/runtime/test_simulate.py" = "simulated measurement and feedback against analytic results"
+"tests/test_virtual_z.py" = "the phase gates Z, S and T against the simulated state"
+"tests/test_transmon_model.py" = "the transmon model's structure; of its golden vectors, the rows listed below"
+# Public names, and the examples run.
+"tests/test_namespace.py" = "the public namespace is these names and only these"
+"tests/test_examples.py" = "every shipped example that needs no GPU runs to completion"
+
+[level0.tests]
+# The right physics, on a GPU where one runs.
+"tests/runtime/test_bell_gpu.py::test_bell_gpu_execution" = "GPU smoke: one Bell pair"
+"tests/runtime/test_rabi_gpu.py::test_rabi_gpu_execution" = "GPU smoke: one Rabi oscillation"
+"tests/runtime/test_rabi_gpu.py::test_rabi_gpu_integrator_parity" = "GPU smoke: the same Rabi oscillation under each integrator"
+"tests/runtime/test_t1_decay_gpu.py::test_t1_decay_gpu" = "GPU smoke: one T1 decay"
+"tests/runtime/test_full_pipeline_gpu.py::test_full_pipeline_gpu" = "GPU smoke: a kernel to the GPU's state"
+# Representative rows of the transmon model's golden vectors; the sweep is at level 2.
+"tests/test_transmon_model.py::test_golden[X2@0.0 f01]" = "a qubit frequency at the upper sweet spot"
+"tests/test_transmon_model.py::test_golden[X2@0.5 f01]" = "a qubit frequency at the lower sweet spot"
+"tests/test_transmon_model.py::test_golden[X2@0.0 alpha]" = "an anharmonicity"
+"tests/test_transmon_model.py::test_golden[flux_for_f01 X2]" = "the flux that gives a frequency"
+"tests/test_transmon_model.py::test_golden[D4-X2@(0.5000,0.0000) zz]" = "the ZZ of a coupled pair"
+"tests/test_transmon_model.py::test_golden[D4-X2@(0.5000,0.0000) j_qq]" = "the exchange of a coupled pair"
+"tests/test_transmon_model.py::test_golden[gate *]" = "the model against the published values of the device"
+# The right export.
+"tests/test_controller.py::test_export_lists_every_timed_operation_with_its_waveform_and_tone" = "the export's events: each timed operation with its waveform and tone"
+"tests/test_controller.py::test_export_marks_the_branch_and_the_measurement_it_depends_on" = "the export's branches and the measurement each depends on"
+"tests/test_controller.py::test_export_names_the_lines_a_sync_joins" = "the export's syncs"
+"tests/test_controller.py::test_a_detuned_tone_gains_phase_between_its_drives" = "the export's frame phase of a detuned tone"
+"tests/test_controller_structured.py::test_a_loop_body_carries_its_period_and_phase_steps" = "the structured format: a rolled loop's period and phase steps"
+"tests/test_controller_structured.py::test_unrolling_the_structured_export_gives_the_flat_one" = "the two export formats describe one program"
+"tests/test_controller_rolled_loops.py::test_a_long_rolled_loop_compiled_for_a_controllers_own_clock_is_summarized_and_exact[asap-feedback-65-0]" = "a measured branch in a rolled loop, summarized and checked as every iteration"
+"tests/test_pickling.py::test_a_program_unpickles_with_its_controller_exports_in_both_formats" = "a pickled program exports as the program it was"
+"tests/test_clocks.py::test_the_export_counts_the_controllers_own_cycles" = "times in the export are in the controller's cycles"
+"tests/test_clocks.py::test_every_time_in_the_exports_is_converted" = "every time in the export is converted to the controller's clock"
+"tests/test_controller_clocks.py::test_each_controller_exports_its_part_of_the_program_in_its_own_cycles" = "each controller's export is in its own cycles"
+# The right schedule: times with units.
+"tests/test_units.py::test_a_time_holds_its_exact_value" = "a time with a unit is exact"
+"tests/test_units.py::test_times_compile_to_the_module_of_their_cycles" = "a time compiles to its number of cycles"
+"tests/test_units.py::test_one_kernel_compiles_for_devices_with_different_clocks" = "one kernel's times convert to each device's clock"
+
+[level1.tests]
+"tests/runtime/test_simulate.py::test_simulate_*" = "how simulate takes its arguments"
+"tests/runtime/test_simulate.py::test_a_step_*" = "step-size warnings and errors"
+"tests/runtime/test_simulate.py::test_the_default_step_*" = "the default step size"
+"tests/runtime/test_simulate.py::test_the_check_follows_the_model_s_levels_not_a_transmon_s" = "which levels the step check reads"
+"tests/runtime/test_simulate.py::test_each_qudit_has_its_model_s_levels_unless_simulate_sets_them" = "an option of simulate"
+"tests/runtime/test_simulate.py::test_level_population_names_the_qudits_and_levels_it_has" = "what an error names"
+"tests/kernel/test_frontend_regressions.py::test_dead_structure_recovery_code_is_gone" = "an internal of the frontend"
+"tests/kernel/test_frontend_regressions.py::test_unknown_opcode_raises_when_executed" = "an internal of the frontend"
+"tests/kernel/test_frontend_regressions.py::test_stack_copies_are_executed" = "an internal of the frontend"
+"tests/kernel/test_frontend_regressions.py::test_short_stack_swap_raises" = "an internal of the frontend"
+"tests/kernel/test_frontend_regressions.py::test_packed_param_names_are_recorded" = "an internal of the frontend"
+"tests/kernel/test_frontend_regressions.py::test_the_locals_scan_matches_values_by_identity" = "an internal of the frontend"
+"tests/kernel/test_frontend_regressions.py::test_symbolic_conversions_never_return" = "an internal of the frontend"
+"tests/test_semantic_regressions.py::test_unknown_pass_is_rejected" = "an error, not a result"
+"tests/test_semantic_regressions.py::test_packed_decoder_rejects_truncated_and_unknown_records" = "an error, not a result"
+"tests/test_workloads.py::test_bug_corpus_loads" = "the bug corpus loads; no test runs its cases"
+"tests/kernel/test_ir_golden.py::test_ci_refuses_to_rewrite_the_goldens" = "how the switch that rewrites the goldens behaves, in a child process"
+"tests/kernel/test_ir_golden.py::test_the_goldens_were_not_rewritten" = "how the switch that rewrites the goldens behaves"
+"tests/classical/test_wire_format.py::test_a_native_handler_*" = "builds a handler with a C compiler and loads it"
+"tests/test_namespace.py::test_viz_loads_on_first_use" = "an import-cost promise, checked in a child process"
+"tests/test_api_docs.py::test_every_public_name_is_documented" = "a new public name without a reference entry is found before merge"
+
+# Level 2, exhaustive: a sweep or a corpus from one function, a property
+# test, a linear-time or bounded-memory claim on a large program, or 5 to
+# 20 s per case.
+
+[level2.files]
+"tests/classical/test_schedule_matrix.py" = "the cross-product of schedule, callee schedule, placement, link and take"
+"tests/test_controller_rolled_loops.py" = "long rolled loops checked as every iteration, swept over clocks, trips, kernels, schedules and systems"
+"tests/test_controller_rolled_calls.py" = "the same sweep for rolled loops of classical calls"
+"tests/test_controller_segment_loops.py" = "the same sweep for loops that end a segment"
+"tests/test_unsynced_lowering.py" = "a sweep of trips, 18 kernels and schedules"
+"tests/test_readout_numbers.py" = "looped readouts simulated under every policy; slow cases"
+"tests/test_challenges.py" = "the scorers against hostile submissions, each in child processes"
+"tests/classical/test_classical_check_loops.py" = "long loops of calls checked from one copy; slow cases"
+"tests/test_region_scheduling.py" = "property tests of retained loops against their unrolling"
+"tests/test_region_lowering.py" = "property tests of retained loops against their unrolling"
+"tests/test_property.py" = "property tests of schedules, passes and tracing"
+"tests/test_tutorials.py" = "every tutorial page runs in a child process and prints what it says"
+"tests/test_tutorial_scripts.py" = "every tutorial script is current and runs in a child process"
+"tests/classical/test_calibration_protocol.py" = "calibration protocols simulated end to end"
+"tests/classical/test_infer_differential.py" = "generated functions checked against running them"
+"tests/classical/test_adaptive_t1_estimates.py" = "a committed benchmark report is reproduced: a numeric regression check"
+
+[level2.tests]
+"tests/test_transmon_model.py::test_golden" = "the sweep over all golden vectors of the transmon model"
+"tests/test_examples.py::test_example_runs[24_pipelined_calibration.py]" = "a slow example"
+"tests/test_examples.py::test_example_runs[25_precompiled_branches.py]" = "a slow example"
+"tests/test_examples.py::test_example_runs[26_drift_following.py]" = "a slow example"
+"tests/test_conventions.py::test_the_page_runs_and_prints_its_comments" = "runs the conventions page's snippets, as the tutorial tests run theirs"
+"tests/test_parametric.py::TestE2ESweeps::test_performance_specialize_vs_recompile" = "compares the time of specializing with the time of recompiling"
+"tests/test_frames.py::test_a_run_of_branches_places_its_frame_changes_in_linear_time" = "a linear-time claim on a large program"
+"tests/test_frames.py::test_a_frame_change_after_a_run_of_branches_as_long_as_the_program_is_placed" = "a program of very many branches, in a child process"
+"tests/classical/test_scheduling.py::test_very_many_calls_schedule_in_linear_time" = "a linear-time claim on a large program"
+"tests/classical/test_scheduling.py::test_shots_that_branch_on_one_answer_schedule_in_linear_time" = "a linear-time claim on a large program"
+"tests/classical/test_scheduling.py::test_scheduling_invariants" = "a property test"
+"tests/classical/test_answer_loops.py::test_random_loops_*" = "random loops played as unrolled; slow cases"
+"tests/classical/test_answer_loops.py::test_a_loop_of_10_6_iterations_*" = "bounded time and memory on a loop of 10^6 iterations"
+"tests/classical/test_answer_loops.py::test_*_in_linear_time" = "a linear-time claim on a large program"
+"tests/classical/test_answer_loops.py::test_simulating_a_long_loop_of_calls_does_the_same_work_per_round" = "a constant-work claim on a long loop"
+"tests/kernel/test_measurement_feedback.py::test_*_in_linear_work" = "a linear-work claim on a large program"
+"tests/test_system.py::test_rounds_on_two_controllers_that_branch_on_an_answer_schedule_in_linear_time" = "a linear-time claim on a large program"
+"tests/test_program_length.py::test_a_call_checks_twenty_thousand_waits_of_one_float" = "a large program; slow cases"
+"tests/test_controller.py::test_a_branch_on_each_of_many_qudits_is_walked_in_linear_time" = "a linear-time claim on a large program"
+"tests/test_controller.py::test_pairs_follow_the_latest_event_on_one_path" = "a property test"
+"tests/test_controller.py::test_a_call_that_lowers_exports" = "a property test"
+"tests/test_rcp_rolled_loops.py::test_*_in_bounded_time*" = "bounded time and memory on loops of 10^15 iterations, each in a child process"
+"tests/test_line_delays.py::test_new_delays_schedule_the_matrix_again_to_the_same_bytes" = "schedules every fifth case of the schedule matrix twice"
+"tests/test_pickling.py::test_another_process_exports_each_controllers_program_compiled_here" = "exports in a child process"
+"tests/runtime/test_step_cache.py::test_kept_steps_stay_few_over_many_steps_and_targets" = "a bounded-memory claim over many steps and targets"
+"tests/runtime/test_coupling.py::test_transmons_detuned_by_gigahertz_stay_put" = "a long simulation"
+"tests/runtime/test_coupling.py::test_dispersive_zz_matches_perturbation_theory" = "a long simulation"
+"tests/test_transmon_surface17.py::test_a_coupled_pair_idles_with_its_dispersive_zz" = "a long simulation"
+"tests/test_markers.py::test_the_nightly_physics_selection_runs_every_physics_test" = "collects the physics suite twice in child processes"
+"tests/test_relocation.py::test_any_placement_matches_static" = "a property test"
+"tests/classical/test_variable.py::test_segment_invariants" = "a property test"
+"tests/classical/test_variable.py::test_the_check_walk_counts_the_segments_of_the_export" = "a property test"
+
+# Level 3, fine detail and long cases: exact message
+# and repr text, internal tables and pins, docs consistency and built-site
+# checks, and anything over 20 s per case.
+
+[level3.files]
+"tests/test_docs_a11y.py" = "the docs build's extensions and page markup"
+"tests/test_docs_api_links.py" = "the docs build's extensions and page markup"
+"tests/test_docs_built_html.py" = "the docs build's extensions and page markup"
+"tests/test_docs_dialect_pages.py" = "the docs build's extensions and page markup"
+"tests/test_docs_related_pages.py" = "the docs build's extensions and page markup"
+"tests/test_docs_search.py" = "the docs build's extensions and page markup"
+"tests/test_code_highlighting.py" = "the docs build's extensions and page markup"
+"tests/test_pulse_visual.py" = "a docs figure matches its data"
+"tests/test_waveform_explorer.py" = "a docs animation matches its data"
+"tests/test_toy_flow.py" = "a docs animation matches its data"
+"tests/test_transmon_surface17_page.py" = "a docs page's include and figures are what its script writes"
+"tests/test_tutorial_figures.py" = "each tutorial figure is what its script draws; one case is long"
+"tests/test_api_docs.py" = "the API reference pages read as the docstrings say"
+
+[level3.tests]
+"tests/test_transmon_model.py::test_there_are_137_checks" = "a pin of the number of golden vectors"
+"tests/test_readout_numbers.py::test_measurements_read_the_same_under_every_policy" = "a long case: one simulation per policy of every kernel"
+"tests/test_readout_numbers.py::test_the_readouts_of_nested_loops_keep_the_kernels_numbers" = "a long case under each policy"
+"tests/test_readout_numbers.py::test_measurements_returned_before_and_after_a_loop_are_found" = "a long case under each policy"
+"tests/test_examples.py::test_example_runs[21_calibration_protocol.py]" = "a long example"
+"tests/test_examples.py::test_the_example_indexes_list_every_example" = "docs consistency: the indexes name every example"
+"tests/test_examples.py::test_the_readme_says_which_examples_simulate_and_need_a_gpu" = "docs consistency: the examples table"
+"tests/test_conventions.py::test_the_page_names_every_test_here_and_only_those" = "docs consistency: the page names its tests"
+"tests/kernel/test_bytecode_normalize.py::test_op_names_match_constants" = "a pin of the interpreter's opcode table, one case per opcode"
+"tests/test_namespace.py::test_ruff_builtins_are_the_kernel_language" = "repository hygiene: the linter's list of builtins"
+"tests/test_namespace.py::test_the_installed_builtins_stub_reexports_exactly_ops_all" = "the editor stub lists the kernel language"
+"tests/test_namespace.py::test_builtins_stub_reexports_exactly_ops_all" = "the editor stub's generator lists the kernel language"
+"tests/test_namespace.py::test_the_release_ships_no_neutral_atom_target" = "release hygiene"  # scope-ok
+"tests/test_namespace.py::test_tracked_files_have_no_neutral_atom_remnants" = "release hygiene, over every tracked file"  # scope-ok
+"tests/physics/test_dissipation.py::test_t2_of_a_qutrit_02" = "a slow physics check, also marked nightly"

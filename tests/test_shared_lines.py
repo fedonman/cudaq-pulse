@@ -97,9 +97,12 @@ def _lowered(kernel, qs, *qudits, **options):
 
 
 def _native(qs, role, qudit):
-    """The frequency of the own tone of qudit *qudit*'s *role* line."""
+    """The frequency of the own tone of qudit *qudit*'s *role* line: its
+    readout's, or its dressed 0-1 frequency for a drive line."""
     physical = qs.physical_qudits[qs.layout[qudit]]
-    return physical.readout.frequency_hz if role == "readout" else physical.frequency_hz
+    if role == "readout":
+        return physical.readout.frequency_hz
+    return qs.qudits[qudit].dressed_frequency_hz
 
 
 # ── The line ────────────────────────────────────────────────────────────────
@@ -391,6 +394,7 @@ def test_dedicated_lines_never_load_the_shared_line_code():
         "low = pulse.compile(k, quantum_system=qs).lower(*qs.qudits[:2])\n"
         "low.export_to_controller()\n"
         "assert 'cudaq_pulse._shared_lines' not in sys.modules, 'loaded'\n"
+        "assert 'cudaq_pulse._broadcast_lines' not in sys.modules, 'loaded'\n"
     )
     subprocess.run([sys.executable, "-c", code], check=True)
 

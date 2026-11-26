@@ -10,6 +10,7 @@ from cudaq_pulse.quantum_systems._registry import ENV_VAR, register_quantum_syst
 from cudaq_pulse.runtime.gpu import GpuRuntimeError, require_gpu_runtime
 
 import tests.property_settings  # noqa: F401  (loads the hypothesis profile)
+from tests import _levels
 from tests._handles import ladder_target
 
 # ``quantum_system()`` without an argument returns the process quantum system.
@@ -63,6 +64,12 @@ def pytest_addoption(parser):
         action="store_true",
         help="rewrite benchmarks/baselines/frontend_perf.json from this run",
     )
+    _levels.add_options(parser)
+
+
+def pytest_configure(config):
+    # Test levels and ``--level`` (tests/_levels.py, tests/levels.toml).
+    _levels.register(config)
 
 
 @pytest.hookimpl(trylast=True)

@@ -19,7 +19,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 from types import MappingProxyType, ModuleType
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 import cudaq_pulse.classical as classical
 
@@ -39,6 +39,10 @@ if TYPE_CHECKING:
     from . import _clocks
     from ._classical_report import ClassicalCall as ClassicalCall
     from ._device import QuantumSystem
+    from ._exposure import Exposure as Exposure
+    from ._exposure import QuditExposure as QuditExposure
+    from ._idle_windows import IdleWindow as IdleWindow
+    from ._idle_windows import IdleWindows as IdleWindows
     from ._programs import _Role
     from ._system import Controller, ControlSystem
     from ._waits import _WaitLengths
@@ -70,6 +74,33 @@ class _Module(ModuleType):
         from ._classical_report import ClassicalCall
 
         return ClassicalCall
+
+    # The types of ScheduledKernel.idle_windows, loaded with the first
+    # program whose idle windows are replaced.
+    @property
+    def IdleWindow(self) -> type[IdleWindow]:  # noqa: N802
+        from ._idle_windows import IdleWindow
+
+        return IdleWindow
+
+    @property
+    def IdleWindows(self) -> type[IdleWindows]:  # noqa: N802
+        from ._idle_windows import IdleWindows
+
+        return IdleWindows
+
+    # The types of ScheduledKernel.exposure, loaded with the first one read.
+    @property
+    def Exposure(self) -> type[Exposure]:  # noqa: N802
+        from ._exposure import Exposure
+
+        return Exposure
+
+    @property
+    def QuditExposure(self) -> type[QuditExposure]:  # noqa: N802
+        from ._exposure import QuditExposure
+
+        return QuditExposure
 
 
 sys.modules[__name__].__class__ = _Module
@@ -132,8 +163,8 @@ DEFAULT_PASSES: tuple[Pass, ...] = (
 )
 
 
+# *passes* as members; an InvalidValueError names any that is not one.
 def _passes(passes: Sequence[str]) -> tuple[Pass, ...]:
-    """*passes* as members; an InvalidValueError names any that is not one."""
     if isinstance(passes, str):
         raise InvalidValueError(
             f"passes must be a sequence of pass names, not the string {passes!r}"
@@ -177,25 +208,24 @@ _LISTED_EVENTS = 10_000
 _SELECTED_AT_RUNTIME: frozenset[str] = frozenset()
 
 
+# Whether a program compiled for *target* can take a value of
+# *parameter_kind* that a measurement selects while it runs.
+#
+# *target* is the quantum system the program is built for. *parameter_kind* is
+# ``"amplitude"`` (of a waveform, or the factor of ``wf_scale``),
+# ``"phase"`` (of ``shift_phase`` and ``set_phase``) or ``"frequency"``
+# (of ``shift_frequency`` and ``set_frequency``). Durations, waveform
+# shapes and anything else that moves ops in time are never asked about.
+#
+# Where this holds, the measurement selects the value once, every op that
+# uses it reads that run-time value, and the schedule starts those ops
+# once the measurement is in. Everywhere else, each op that uses the value
+# runs in both arms of an if on the measurement, with that arm's value.
+# Simulation gives the same result either way. No target takes any kind
+# at run time: ``export_to_controller`` gives a kept value as ``null`` with
+# its expression beside it (the select on the measurement), and
+# ``export_to_emulator`` carries no parameters.
 def _can_select_at_runtime(target: QuantumSystem, parameter_kind: str) -> bool:
-    """Whether a program compiled for *target* can take a value of
-    *parameter_kind* that a measurement selects while it runs.
-
-    *target* is the quantum system the program is built for. *parameter_kind* is
-    ``"amplitude"`` (of a waveform, or the factor of ``wf_scale``),
-    ``"phase"`` (of ``shift_phase`` and ``set_phase``) or ``"frequency"``
-    (of ``shift_frequency`` and ``set_frequency``). Durations, waveform
-    shapes and anything else that moves ops in time are never asked about.
-
-    Where this holds, the measurement selects the value once, every op that
-    uses it reads that run-time value, and the schedule starts those ops
-    once the measurement is in. Everywhere else, each op that uses the value
-    runs in both arms of an if on the measurement, with that arm's value.
-    Simulation gives the same result either way. No target takes any kind
-    at run time: ``export_to_controller`` gives a kept value as ``null`` with
-    its expression beside it (the select on the measurement), and
-    ``export_to_emulator`` carries no parameters.
-    """
     return parameter_kind in _SELECTED_AT_RUNTIME
 
 
@@ -265,6 +295,17 @@ class _MachineModel:
         # given, else _RCP_DRIVES and _RCP_READOUTS. Not fields, as _bare.
         _drive_lanes: int = field(init=False)
         _readout_lanes: int = field(init=False)
+
+        # The emulator export of a program on one controller or none
+        # (classical.wire sets it when it loads).
+        _emulation: ClassVar[Any]
+        _emulation_part: ClassVar[Any]
+
+        def _clocked_builder(self, builder: Any, target: QuantumSystem) -> Any: ...
+
+        def _clocked_module(
+            self, module: Any, target: QuantumSystem, clocks: Any, max_duration_cycles: int | None
+        ) -> Mapping[tuple[str, int], float] | None: ...
 
     def __post_init__(self) -> None:
         drives, readouts = self.max_concurrent_drives, self.max_concurrent_readouts
@@ -426,9 +467,9 @@ _DEFAULT_MACHINE = _MachineModel()
 _UNLISTED_LINK: list[classical.Link] = []
 
 
+# ``Link()``, the link of a program's link its machine does not list
+# (one, made when first needed: links are immutable).
 def _unlisted_link() -> classical.Link:
-    """``Link()``, the link of a program's link its machine does not list
-    (one, made when first needed: links are immutable)."""
     if not _UNLISTED_LINK:
         _UNLISTED_LINK.append(classical.Link())
     return _UNLISTED_LINK[0]
@@ -546,6 +587,14 @@ class CompileOptions:
     # (kernel/_unit_warnings.py).
     unit_warnings = False
 
+    def tracer(self, builder: Any, target: QuantumSystem) -> Any:
+        """The tracer of a compilation whose ``unit_warnings`` is set: the
+        one that warns of bare numbers, or (``_idle._SiteOptions``) the one
+        that also keeps idle replacement's record of the operations."""
+        from .kernel._unit_warnings import unit_checked
+
+        return unit_checked(builder, target)
+
     @staticmethod
     def make(
         schedule: str = "alap",
@@ -606,8 +655,8 @@ class CompileOptions:
         )
 
 
+# The error for ``bind(values)`` with the wrong number of *values*.
 def _bind_count_error(parameters: tuple[str, ...], values: Any) -> InvalidTypeError:
-    """The error for ``bind(values)`` with the wrong number of *values*."""
     try:
         count = len(values)
     except TypeError:
@@ -638,9 +687,9 @@ def _bind_count_error(parameters: tuple[str, ...], values: Any) -> InvalidTypeEr
 _REAL_TYPES: set[type] = {float, int}
 
 
+# *values* as floats, one per parameter, or the error for their count or
+# naming the first parameter whose value is not a real number, or is NaN.
 def _bind_checked(parameters: tuple[str, ...], values: Any) -> list[float]:
-    """*values* as floats, one per parameter, or the error for their count or
-    naming the first parameter whose value is not a real number, or is NaN."""
     try:
         fits = len(values) == len(parameters)
     except TypeError:
@@ -861,10 +910,10 @@ class ScheduledKernel:
         view.runtime_selects = self.runtime_selects
         return view
 
+    # ``bind`` for *values* known to be one real number per parameter and
+    # none NaN, such as a kernel call's. Whether each is a finite float is
+    # checked where the module uses them (``_concrete`` and simulation).
     def _with_values(self, values: Sequence[float]) -> ScheduledKernel:
-        """``bind`` for *values* known to be one real number per parameter and
-        none NaN, such as a kernel call's. Whether each is a finite float is
-        checked where the module uses them (``_concrete`` and simulation)."""
         waits = self.waits
         if waits is not None:
             waits.check(values)
@@ -935,13 +984,13 @@ class ScheduledKernel:
             program = program._generic
         return program._reused_trace
 
+    # Whether the module has runtime qudits and no carriers for them.
     def _unbound(self) -> bool:
-        """Whether the module has runtime qudits and no carriers for them."""
         return self._role is not None and self._role.slots > 0 and not self.carriers
 
+    # The module with the values substituted (a private copy), or the
+    # module itself when there are no values.
     def _concrete(self) -> Any:
-        """The module with the values substituted (a private copy), or the
-        module itself when there are no values."""
         if not self.arguments:
             return self._module
         if self._concrete_module is None:
@@ -955,9 +1004,9 @@ class ScheduledKernel:
             self._concrete_module = module
         return self._concrete_module
 
+    # The call's values as floats, or the error naming the first that is
+    # not a real number or not finite.
     def _checked_arguments(self) -> list[float]:
-        """The call's values as floats, or the error naming the first that is
-        not a real number or not finite."""
         generic = self._generic
         names = generic.parameters if generic is not None else ()
         values = _bind_checked(names, self.arguments)
@@ -1063,10 +1112,10 @@ class ScheduledKernel:
         """
         return self._segments()[0]
 
+    # The segments, and the segment each one follows (``None`` for the
+    # first): the one its barrier ends, on the lines the barrier holds
+    # back. Its shift adds to that segment's.
     def _segments(self) -> tuple[list[Segment], list[int | None]]:
-        """The segments, and the segment each one follows (``None`` for the
-        first): the one its barrier ends, on the lines the barrier holds
-        back. Its shift adds to that segment's."""
         module = self._module if self.scheduled else self._concrete()
         with self._lock:
             boundaries = module.segment_boundaries()
@@ -1079,9 +1128,9 @@ class ScheduledKernel:
             after.append(before)
         return segments, after
 
+    # The segment of each event of ``schedule`` (with *syncs*, of the
+    # controller export), in the same order.
     def _event_segments(self, syncs: bool) -> list[int]:
-        """The segment of each event of ``schedule`` (with *syncs*, of the
-        controller export), in the same order."""
         if not self.classical:
             return []
         module = self._concrete() if syncs or self.rescheduled else self._module
@@ -1103,6 +1152,27 @@ class ScheduledKernel:
         Calls in a loop are listed once per iteration, in program order.
         """
         return (_report or _load_report())(self)
+
+    @property
+    def idle_windows(self) -> IdleWindows | None:
+        """The idle windows of a program lowered by ``compiled.replace_idle(rule)``:
+        each stretch of at least the rule's threshold in which a qudit idles,
+        with what was done there (see ``IdleWindow``). ``None`` for a program
+        whose idle windows were not replaced."""
+        return getattr(self.metrics, "idle_windows", None)
+
+    @property
+    def exposure(self) -> Exposure:
+        """What the schedule does to each qudit over time, built when read:
+        per qudit and per outermost loop it has a pulse in, the cycles of
+        one round in which the qudit is driven, read out and idle, the number of rounds, and
+        what the idle time costs at the qudit's T1 and T2 star (see
+        ``QuditExposure``); ``print`` it for a table. Loops stay rolled, so
+        it costs the same for 2 rounds as for a million. ``UnsupportedError``
+        for a program whose schedule depends on its arguments' values."""
+        from ._exposure import report
+
+        return report(self)
 
     def export_to_emulator(self, *, controller: int | None = None) -> dict[str, Any]:
         """The program for a controller emulator: its schedule by segment, its
@@ -1208,18 +1278,22 @@ def _load_report() -> Callable[[ScheduledKernel], list[ClassicalCall]]:
     return report
 
 
+# The error for a literal the extension rejected, with the kernel line
+# that wrote it. The kernel is traced again up to that line, never running
+# its host code again: a trace that reaches host code first stops there and
+# names that line as the one at or before it. When the trace differs (the
+# kernel read state that changed), the line is left out rather than
+# guessed.
 def _rejected_literal(
     fn: Any, trace_args: Sequence[Any], traced: Any, error: PackedValueError
 ) -> CompilationError:
-    """The error for a literal the extension rejected, with the kernel line
-    that wrote it. The kernel is traced again up to that line, never running
-    its host code again: a trace that reaches host code first stops there and
-    names that line as the one at or before it. When the trace differs (the
-    kernel read state that changed), the line is left out rather than
-    guessed."""
     from .kernel._emitter import add_source_note
 
     message, word = error.args
+    limited = vars(traced).get("get_buffer")
+    if limited is not None:
+        # A builder under a controller's longest program says the limit.
+        message = limited.restated(message)
     arms = message.startswith("arms:")
     if arms:
         located = _different_lines(message, None)
@@ -1256,14 +1330,14 @@ def _rejected_literal(
     return located
 
 
+# The error for a name, or a place of a list, that holds different
+# lines (or different tones) after the two arms of an if on a
+# measurement, and is then operated on, or that a loop compiled as one
+# loop would have to carry between its iterations. *message* is the
+# extension's: ``arms:``, the place of that result of the if, ``,tone``
+# when it is a tone and ``,loop`` for the loop. *labels* is what each
+# result of the if is carried by, when known.
 def _different_lines(message: str, labels: Sequence[str] | None) -> CompilationError:
-    """The error for a name, or a place of a list, that holds different
-    lines (or different tones) after the two arms of an if on a
-    measurement, and is then operated on, or that a loop compiled as one
-    loop would have to carry between its iterations. *message* is the
-    extension's: ``arms:``, the place of that result of the if, ``,tone``
-    when it is a tone and ``,loop`` for the loop. *labels* is what each
-    result of the if is carried by, when known."""
     place, *marks = message[5:].split(",")
     what = "a name or a place of a list"
     if labels is not None and place.isdigit() and int(place) < len(labels):
@@ -1292,6 +1366,13 @@ def _different_lines(message: str, labels: Sequence[str] | None) -> CompilationE
     )
 
 
+# Why a trace of *fn* failed with *failed*, when what it wrote before
+# failing says so: a record the extension rejects (an if whose arms leave
+# different lines in one place) leaves the tracer with a line it has lost
+# track of, and the trace fails at a later operation on that line with an
+# error about the operation. Only a line the failing operation was given
+# is looked up: another the kernel holds may be lost as well, and is not
+# why this operation failed.
 def _cause_in_program(
     fn: Any,
     trace_args: Sequence[Any],
@@ -1301,13 +1382,6 @@ def _cause_in_program(
     slots: int,
     failed: CompilationError,
 ) -> CompilationError | None:
-    """Why a trace of *fn* failed with *failed*, when what it wrote before
-    failing says so: a record the extension rejects (an if whose arms leave
-    different lines in one place) leaves the tracer with a line it has lost
-    track of, and the trace fails at a later operation on that line with an
-    error about the operation. Only a line the failing operation was given
-    is looked up: another the kernel holds may be lost as well, and is not
-    why this operation failed."""
     from .kernel.ir_builder import LINEAR_TYPES, IRValue
 
     # A line the tracer has lost track of is no channel's value and has no
@@ -1403,17 +1477,19 @@ def build(
         flatten_schedules=options.flatten_schedules,
     )
     builder.unroll_threshold = options.unroll_threshold
-    builder.line_tones = target._line_tones
+    # A coupled system's tones are a Mapping that works higher ones out when
+    # read; the emitter only calls .get on it.
+    builder.line_tones = target._line_tones  # type: ignore[assignment]
+    if target._description._own_carrier:
+        _refuse_other_qudits_tones(builder, target, fn, trace_args)
     builder.machine = machine
     builder.locate_structural = frozenset(parameters)
     plain = machine._plain
-    clocks = None if plain else _clocked_builder(builder, machine, target)
+    clocks = None if plain else machine._clocked_builder(builder, target)
     # One try for the trace and the module: a try statement costs a bytecode.
     try:
         if options.unit_warnings:
-            from .kernel._unit_warnings import unit_checked
-
-            checked = unit_checked(builder, target)
+            checked = options.tracer(builder, target)
             builder.returned = _trace_kernel_with_builder(fn, builder, trace_args, checked)
         else:
             builder.returned = _trace_kernel_with_builder(fn, builder, trace_args)
@@ -1510,7 +1586,7 @@ def build(
     fine_delays = (
         None
         if plain and max_duration_cycles is None
-        else _clocked_module(module, machine, target, clocks, max_duration_cycles)
+        else machine._clocked_module(module, target, clocks, max_duration_cycles)
     )
     metrics.ffi_ms = (time.perf_counter() - t0) * 1000
 
@@ -1623,31 +1699,89 @@ def build(
         role.every = qudits
         role.program_id = role.identify(buf, name, parameters, target, options)
     if not plain:
-        lowered = _check_controller(lowered)
+        try:
+            lowered = _check_controller(lowered)
+        except CompilationError as error:
+            # A try statement costs a bytecode where the check passes.
+            return _placed_by_limits(
+                error, fn, trace_args, parameters, target, options, slots, role, max_duration_cycles
+            )
     return lowered, builder
 
 
+#: The policy that places a program by its control system's limits, for
+#: each that does not (``_placed_by_limits``).
+_PLACED_BY_LIMITS = {"asap": "rcp", "alap": "alap_rcp"}
+
+
+# A program asap or alap places past a limit of its control system, which
+# declares how many drives or readouts play at once, built again as rcp or
+# alap_rcp places it, when that keeps to every limit; else *error*, the limits
+# the program is over. Only a program the controller check refuses comes here;
+# one compiled with ``keeps_schedule`` options (idle replacement's fills) keeps
+# its schedule and its error.
+def _placed_by_limits(
+    error: CompilationError,
+    fn: Any,
+    trace_args: Sequence[Any],
+    parameters: tuple[str, ...],
+    target: QuantumSystem,
+    options: CompileOptions,
+    slots: int,
+    role: _Role | None,
+    max_duration_cycles: int | None,
+) -> tuple[ScheduledKernel, Any]:
+    from .controller import ControllerLimitError
+
+    machine = options.machine
+    placed = _PLACED_BY_LIMITS.get(options.schedule)
+    if (
+        not isinstance(error, ControllerLimitError)
+        or placed is None
+        or getattr(options, "keeps_schedule", False)
+        or (machine.max_concurrent_drives is None and machine.max_concurrent_readouts is None)
+    ):
+        raise error
+    try:
+        return build(
+            fn,
+            trace_args,
+            parameters,
+            target,
+            dataclasses.replace(options, schedule=placed),
+            slots,
+            role,
+            max_duration_cycles,
+        )
+    except Exception:
+        # Placed by the limits, the program fails otherwise: the limit it is
+        # over is the error to give.
+        raise error from None
+
+
+# Set *builder* up for the model's controllers; their clock plan.
+# ``_MachineModel._clocked_builder``: the model of a control system with a
+# broadcast line has its own (``_broadcast_lines``).
 def _clocked_builder(
-    builder: Any, machine: _MachineModel, target: QuantumSystem
+    self: _MachineModel, builder: Any, target: QuantumSystem
 ) -> _clocks.ClockPlan | None:
-    """Set *builder* up for *machine*'s controllers; their clock plan."""
     from . import _clocks
 
-    system = machine._system
-    controller = machine.controller
+    system = self._system
+    controller = self.controller
     if system is not None and controller is None:
         clocks = system._clock_plan(target.clock_ghz)
-    elif controller is None and machine.reference_clock_ghz is None:
+    elif controller is None and self.reference_clock_ghz is None:
         clocks = None
     else:
-        clocks = _clocks.plan(controller, target.clock_ghz, machine.reference_clock_ghz)
+        clocks = _clocks.plan(controller, target.clock_ghz, self.reference_clock_ghz)
         if clocks is not None and controller is not None:
             # The controller counts its feedback latency in its own cycles;
             # the scheduler waits it in the program's (a new plan: plans
             # are cached).
             from fractions import Fraction
 
-            latency = Fraction(machine.readout_latency_cycles) / clocks.controllers[0].ratio
+            latency = Fraction(self.readout_latency_cycles) / clocks.controllers[0].ratio
             clocks = dataclasses.replace(clocks, readout_latency_cycles=math.ceil(latency))
     if clocks is not None:
         builder.line_grid = clocks.grid_of
@@ -1667,38 +1801,41 @@ def _clocked_builder(
         if len(set(rates)) == 1:
             builder.sample_rate = rates[0]
         else:
+            from .kernel._mixed_rates import MixedRates
+
             owners = system._line_owners
             builder.sample_rate_of = lambda role, qudit: (
                 None if (owner := owners.get((role, qudit))) is None else rates[owner]
             )
+            builder.tracer = MixedRates
     return clocks
 
 
+# Give *module* its control system (``pulse.control_system``): the
+# controller and delay of each line, and each controller's grid, clock
+# ratio, feedback and peer latency, start uncertainty, frames, calls and
+# *max_duration_cycles*, where any differs from the default; the fine
+# delays.
 def _clocked_module(
+    self: _MachineModel,
     module: Any,
-    machine: _MachineModel,
     target: QuantumSystem,
     clocks: _clocks.ClockPlan | None,
     max_duration_cycles: int | None,
 ) -> Mapping[tuple[str, int], float] | None:
-    """Give *module* its control system (``pulse.control_system``): the
-    controller and delay of each line, and each controller's grid, clock
-    ratio, feedback and peer latency, start uncertainty, frames, calls and
-    *max_duration_cycles*, where any differs from the default; the fine
-    delays."""
     from . import _clocks
 
     shifts: Mapping[tuple[str, int], int] = {}
     fine_delays = None
-    if machine._line_delays:
-        shifts, fine_delays = _line_delays(machine, target, clocks)
-    lines = _lines(machine, shifts, fine_delays, target.clock_ghz)
-    system = machine._system
-    if system is not None and machine.controller is None:
+    if self._line_delays:
+        shifts, fine_delays = _line_delays(self, target, clocks)
+    lines = _lines(self, shifts, fine_delays, target.clock_ghz)
+    system = self._system
+    if system is not None and self.controller is None:
         controllers = system._controllers_attribute(target.clock_ghz, max_duration_cycles)
     else:
-        controllers = _controller_attribute(machine.controller, clocks, max_duration_cycles)
-    if limits := _program_limits(machine, target.clock_ghz):
+        controllers = _controller_attribute(self.controller, clocks, max_duration_cycles)
+    if limits := _program_limits(self, target.clock_ghz):
         module.set_attributes(limits)
     if lines or controllers:
         text = "{pulse.control_system = #pulse.control_system<clock_period_fs = "
@@ -1711,9 +1848,121 @@ def _clocked_module(
     return fine_delays
 
 
+# Methods of the model, so that the model of a control system with a
+# broadcast line (``_broadcast_lines``) sets up the trace and the module for
+# one, and no other compilation asks whether it has one.
+_MachineModel._clocked_builder = _clocked_builder  # type: ignore[method-assign]
+_MachineModel._clocked_module = _clocked_module  # type: ignore[method-assign]
+
+
+# For a quantum system whose qudits give no frequencies: make *builder*
+# refuse a drive or readout at the tone of another qudit. Each tone is
+# then an offset from its own qudit's carrier, and the system does not
+# state how far apart two carriers are. A tone whose qudit the trace does
+# not know is refused too. Only such a system's builder is wrapped; every
+# other compile emits as it did.
+def _refuse_other_qudits_tones(
+    builder: Any, target: QuantumSystem, fn: Any, trace_args: Sequence[Any]
+) -> None:
+    emit = builder.emit
+    lines = ("pulse.get_drive_line", "pulse.get_readout_line")
+    # The qudit (by the value it was made from) of each line and tone the
+    # builder made, for a value whose channel the trace does not record.
+    made: dict[int, int] = {}
+
+    def owner(value: Any) -> int | None:
+        chan = getattr(value, "chan", None)
+        return made.get(value.vid) if chan is None else chan.held.key[0]
+
+    def named(qref: int) -> str:
+        qudit = builder._qref_to_qudit.get(qref)
+        if qudit is None:
+            return "another qudit"
+        if qudit >= 0:
+            layout = target.layout
+            return f"qudit {layout.index(qudit) if qudit in layout else qudit}"
+        return _runtime_qudit(fn, trace_args, qudit)
+
+    def checked(kind: str, operands: Any = (), result_types: Any = (), attrs: Any = None) -> Any:
+        played = kind == "pulse.drive" or kind == "pulse.readout"
+        ours = theirs = None
+        if played:
+            line, tone = operands[0], operands[2]
+            ours, theirs = owner(line), owner(tone)
+            chan = getattr(line, "chan", None)
+            if chan is not None and len(chan.held.cells) > 1 and chan.held.cells[1].value is tone:
+                # The line's own tone as it is now.
+                theirs = ours
+            op = kind.removeprefix("pulse.")
+            reason = (
+                f"the qudits of quantum system {target.name!r} give no frequency_hz, so each "
+                "tone is an offset from its own qudit's carrier and the system does not state "
+                "how far apart two carriers are"
+            )
+            if ours is None or theirs is None:
+                raise CompilationError(
+                    f"{op}(): the trace cannot tell which qudit's tone tone= is (the tone, or "
+                    "the line, is a value of its own: what a loop carries, or what the arms of "
+                    f"an if on a measurement bind differently); {reason}",
+                    code="control_system",
+                    fix="read the tone from its line where it is used, as line.tone or "
+                    "line.tones[(1, 2)], or give the qudits their frequencies",
+                )
+            # One qudit, by its index where the builder knows both.
+            mine, other = map(builder._qref_to_qudit.get, (ours, theirs))
+            if ours != theirs if mine is None or other is None else mine != other:
+                raise CompilationError(
+                    f"{op}(): tone= is the tone of {named(theirs)}, and the line is that of "
+                    f"{named(ours)}; {reason}",
+                    code="control_system",
+                    fix="give the qudits their frequencies, or drive the line at its own tone",
+                )
+        results = emit(kind, operands, result_types, attrs)
+        for result in results:
+            # An id is used again after the trace takes a body back.
+            made.pop(result.vid, None)
+        if played:
+            # Both known, or the drive was refused.
+            if ours is not None and theirs is not None:
+                made[results[0].vid], made[results[1].vid] = ours, theirs
+        elif kind in lines:
+            made[results[0].vid] = made[results[1].vid] = operands[0].vid
+        elif results and not kind.startswith("scf."):
+            # A tone or line an op makes from one of its kind is that one's
+            # qudit's; from several, in their order.
+            for vtype in ("tone", "drive_line", "readout_line"):
+                after = [r for r in results if r.vtype == vtype]
+                before = [o for o in operands if getattr(o, "vtype", None) == vtype]
+                if after and len(after) == len(before):
+                    for result, source in zip(after, before, strict=True):
+                        found = owner(source)
+                        if found is not None:
+                            made[result.vid] = found
+        return results
+
+    builder.emit = checked
+
+
+# How an error names the runtime qudit that traces as qudit *slot*
+# (-1 - k): by the kernel's parameter.
+def _runtime_qudit(fn: Any, trace_args: Sequence[Any], slot: int) -> str:
+    from ._device import Qudit, Register
+
+    code = getattr(fn, "__code__", None)
+    names = code.co_varnames[: code.co_argcount] if code is not None else ()
+    for name, value in zip(names, trace_args, strict=False):
+        if value.__class__ is Qudit and value.index == slot:
+            return f"the qudit {name!r}"
+        if value.__class__ is Register:
+            for k, qudit in enumerate(value):
+                if qudit.index == slot:
+                    return f"the qudit {name}[{k}]"
+    return "a runtime qudit"
+
+
+# ``pulse.program_limits``: each controller's ``max_program_duration``,
+# which the scheduled program is checked against; empty for none.
 def _program_limits(machine: _MachineModel, program_ghz: float) -> str:
-    """``pulse.program_limits``: each controller's ``max_program_duration``,
-    which the scheduled program is checked against; empty for none."""
     from ._system import _label
 
     system = machine._system
@@ -1736,14 +1985,14 @@ def _program_limits(machine: _MachineModel, program_ghz: float) -> str:
     return f"{{pulse.program_limits = [{', '.join(entries)}]}}" if entries else ""
 
 
+# The ``controllers`` of a program's control system on one controller:
+# its grid, frames, calls and *max_duration_cycles*; empty when all are
+# the defaults.
 def _controller_attribute(
     controller: Controller | None,
     clocks: _clocks.ClockPlan | None,
     max_duration_cycles: int | None,
 ) -> str:
-    """The ``controllers`` of a program's control system on one controller:
-    its grid, frames, calls and *max_duration_cycles*; empty when all are
-    the defaults."""
     fields = []
     if clocks is not None and clocks.controllers[0].grid > 1:
         fields.append(f"grid_cycles = {clocks.controllers[0].grid}")
@@ -1757,17 +2006,17 @@ def _controller_attribute(
     return f"[#pulse.controller<{', '.join(fields)}>]" if fields else ""
 
 
+# The ``lines`` of a program's control system: each line the system
+# gives a controller of (on several) or that *shifts* moves, with its
+# controller and delay in program cycles, and each readout line's fine
+# delay (*fine_delays*, ns) rounded up to the program's cycles, when a
+# readout on it ends that much later; empty for none.
 def _lines(
     machine: _MachineModel,
     shifts: Mapping[tuple[str, int], int],
     fine_delays: Mapping[tuple[str, int], float] | None = None,
     program_ghz: float = 0.0,
 ) -> str:
-    """The ``lines`` of a program's control system: each line the system
-    gives a controller of (on several) or that *shifts* moves, with its
-    controller and delay in program cycles, and each readout line's fine
-    delay (*fine_delays*, ns) rounded up to the program's cycles, when a
-    readout on it ends that much later; empty for none."""
     system = machine._system if machine.controller is None else None
     owners: Mapping[tuple[str, int], int] = {} if system is None else system._line_owners
     fine = {
@@ -1809,9 +2058,9 @@ def _line_delays(
         raise CompilationError(str(e)) from None
 
 
+# *module*, scheduled, with the updates on the update buses of the
+# controllers that ask for it spaced (``_bus_spacing``).
 def _spaced(module: Any, machine: _MachineModel, target: QuantumSystem, args: Any) -> Any:
-    """*module*, scheduled, with the updates on the update buses of the
-    controllers that ask for it spaced (``_bus_spacing``)."""
     system = machine._system
     given = (machine.controller,) if system is None else system.controllers
     spacing = [c for c in given if c is not None and c.space_updates and c.update_buses]
@@ -1822,9 +2071,9 @@ def _spaced(module: Any, machine: _MachineModel, target: QuantumSystem, args: An
     return spaced(module, spacing, target, args)
 
 
+# The drives and readouts *lowered* plays at once past the limits its
+# control system gives (``_concurrency``), and whether that is exact.
 def _over_concurrency(lowered: ScheduledKernel) -> tuple[list[str], bool]:
-    """The drives and readouts *lowered* plays at once past the limits its
-    control system gives (``_concurrency``), and whether that is exact."""
     machine = lowered.options.machine
     if machine.max_concurrent_drives is None and machine.max_concurrent_readouts is None:
         return [], True
@@ -1833,10 +2082,10 @@ def _over_concurrency(lowered: ScheduledKernel) -> tuple[list[str], bool]:
     return violations(lowered)
 
 
+# *lowered*, checked against its controller limits: those it exceeds
+# whatever its float values fail now, and when some values may exceed
+# others, each call's values are checked when they are bound.
 def _check_controller(lowered: ScheduledKernel) -> ScheduledKernel:
-    """*lowered*, checked against its controller limits: those it exceeds
-    whatever its float values fail now, and when some values may exceed
-    others, each call's values are checked when they are bound."""
     machine = lowered.options.machine
     limits = machine.controller
     system = machine._system
@@ -1915,7 +2164,15 @@ def with_line_delays(lowered: _Kernel, options: CompileOptions) -> _Kernel | Non
     result.classical = lowered.classical
     result.runtime_selects = lowered.runtime_selects
     result._reused_trace = True
-    return _check_controller(result)
+    if options.schedule not in _PLACED_BY_LIMITS:
+        return _check_controller(result)
+    from .controller import ControllerLimitError
+
+    try:
+        return _check_controller(result)
+    except ControllerLimitError:
+        # Placed past a limit: a full compile places it by the limits.
+        return None
 
 
 class _ClassicalFunctions(tuple[Any, ...]):
@@ -1931,9 +2188,9 @@ class _ClassicalFunctions(tuple[Any, ...]):
 _NO_KEYS: dict[str, tuple[int, str | None]] = {}
 
 
+# Per compiled name of a classical function *lowered* calls, its
+# dispatch key and the controller that fixes it.
 def _dispatch_keys(lowered: ScheduledKernel) -> dict[str, tuple[int, str | None]]:
-    """Per compiled name of a classical function *lowered* calls, its
-    dispatch key and the controller that fixes it."""
     called = lowered.classical
     if not called:
         return _NO_KEYS
@@ -1946,16 +2203,16 @@ def _dispatch_keys(lowered: ScheduledKernel) -> dict[str, tuple[int, str | None]
     return keys
 
 
+# Per classical function *lowered* calls, its link id, dispatch key and
+# the controller that fixes the key.
 def _routes(lowered: ScheduledKernel) -> Sequence[tuple[int, int, str | None]]:
-    """Per classical function *lowered* calls, its link id, dispatch key and
-    the controller that fixes the key."""
     routes: Sequence[tuple[int, int, str | None]] = getattr(lowered.classical, "routes", ())
     return routes
 
 
+# Per link id, the keys fixed on it (by function name), each with what
+# fixes them: a processor's ``dispatch_keys`` on its ``links``.
 def _dispatch_tables(machine: _MachineModel) -> dict[int, dict[str, tuple[int, str]]]:
-    """Per link id, the keys fixed on it (by function name), each with what
-    fixes them: a processor's ``dispatch_keys`` on its ``links``."""
     system = machine._system
     if system is not None and machine.controller is None:
         controllers: Sequence[Any] = system.controllers
@@ -1976,6 +2233,7 @@ def _dispatch_tables(machine: _MachineModel) -> dict[int, dict[str, tuple[int, s
     return tables
 
 
+# Enter the keys *given* by *label* in *tables*, on each of *links*.
 def _fix_keys(
     machine: _MachineModel,
     tables: dict[int, dict[str, tuple[int, str]]],
@@ -1983,7 +2241,6 @@ def _fix_keys(
     links: Sequence[int | str],
     given: Mapping[str, int],
 ) -> None:
-    """Enter the keys *given* by *label* in *tables*, on each of *links*."""
     for link in links:
         if isinstance(link, str) and link not in machine.link_names:
             continue

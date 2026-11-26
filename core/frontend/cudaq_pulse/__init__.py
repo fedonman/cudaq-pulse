@@ -103,6 +103,8 @@ if TYPE_CHECKING:
     from . import viz as viz
     from ._capability import Capability as Capability
     from ._error_codes import ErrorCode as ErrorCode
+    from ._idle import IdleReplacement as IdleReplacement
+    from ._load import load as load
     from ._system import Controller as Controller
     from ._system import ControlSystem as ControlSystem
     from ._system import Processor as Processor
@@ -136,10 +138,14 @@ _LAZY_EXPORTS = {
     # Making an enum costs more than importing what compiling needs.
     "ErrorCode": "._error_codes",
     "UnitWarning": ".kernel._unit_warnings",
+    # Only a compilation that replaces idle windows loads it.
+    "IdleReplacement": "._idle",
     "Controller": "._system",
     "ControlSystem": "._system",
     "Processor": "._system",
     "Link": ".classical",
+    # Loading another compiler's module is not what compiling a kernel needs.
+    "load": "._load",
 }
 _LAZY_MODULES = {
     "viz": ".viz",
@@ -152,6 +158,7 @@ __all__ = [
     "kernel",
     "Kernel",
     "compile",
+    "load",
     "CompiledKernel",
     "ScheduledKernel",
     "Pass",
@@ -183,6 +190,7 @@ __all__ = [
     "PulseWarning",
     "UpgradeNotice",
     "UnitWarning",
+    "IdleReplacement",
     "NoProcessQuantumSystemError",
     "NoQuantumSystemError",
     "QuantumSystemMismatchError",

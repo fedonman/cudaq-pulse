@@ -43,6 +43,13 @@
 #include <cmath>
 #include <iterator>
 
+namespace pulse {
+/// Whether `module` holds a pulse.call (PulseCallCheck.cpp).
+bool moduleHasCalls(mlir::ModuleOp module);
+/// pulse-verify's check of a module with placed calls (PulseCallCheck.cpp).
+mlir::LogicalResult checkCalls(mlir::ModuleOp module);
+} // namespace pulse
+
 namespace {
 
 static bool isTimedOp(mlir::Operation *op) {
@@ -55,18 +62,24 @@ static bool isTimedOp(mlir::Operation *op) {
 static void conditionMeasurements(mlir::Value value,
                                   llvm::SmallVectorImpl<mlir::Value> &found,
                                   llvm::DenseSet<mlir::Value> &seen) {
-  if (mlir::isa<classical::LinkType>(value.getType()) ||
-      !seen.insert(value).second)
-    return;
-  if (mlir::isa<pulse::MeasurementType>(value.getType())) {
-    found.push_back(value);
-    return;
+  // The values still to follow, the next one last: an operation's operands
+  // in their order, each with all it is computed from before the next.
+  llvm::SmallVector<mlir::Value, 16> todo{value};
+  while (!todo.empty()) {
+    mlir::Value next = todo.pop_back_val();
+    if (mlir::isa<classical::LinkType>(next.getType()) ||
+        !seen.insert(next).second)
+      continue;
+    if (mlir::isa<pulse::MeasurementType>(next.getType())) {
+      found.push_back(next);
+      continue;
+    }
+    mlir::Operation *def = next.getDefiningOp();
+    if (!def || mlir::isa<classical::WaitOp>(def))
+      continue;
+    for (mlir::Value operand : llvm::reverse(def->getOperands()))
+      todo.push_back(operand);
   }
-  mlir::Operation *def = value.getDefiningOp();
-  if (!def || mlir::isa<classical::WaitOp>(def))
-    return;
-  for (mlir::Value operand : def->getOperands())
-    conditionMeasurements(operand, found, seen);
 }
 
 /// Checks the schedule attributes of one function, walking the program in
@@ -475,6 +488,12 @@ struct PulseVerifyPass
 
   void runOnOperation() override {
     auto module = getOperation();
+    // A module with pulse.call is checked as it is written out.
+    if (pulse::moduleHasCalls(module)) [[unlikely]] {
+      if (mlir::failed(pulse::checkCalls(module)))
+        signalPassFailure();
+      return;
+    }
     bool hadError = false;
 
     // Check 1: Linearity -- lines must be consumed. The warning names the

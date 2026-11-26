@@ -56,9 +56,9 @@ if TYPE_CHECKING:
 
     from .wire import _EMULATION_FORMAT as FORMAT  # noqa: F401
     from .wire import _MANIFEST_FORMAT as MANIFEST_FORMAT  # noqa: F401
-    from .wire import _emulation_export as export  # noqa: F401
+    from .wire import _emulation_export as export
     from .wire import _export_part as export_part  # noqa: F401
-    from .wire import _manifest as manifest  # noqa: F401
+    from .wire import _manifest as manifest
 
 __all__ = [
     "CallTrace",

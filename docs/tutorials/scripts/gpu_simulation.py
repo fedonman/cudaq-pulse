@@ -67,7 +67,7 @@ for name, qudit in (("X1", x1), ("D2", d2)):
 
 # Prints:
 #   dimensions: (3, 3)
-#   X1 excited: 0.4945
+#   X1 excited: 0.4944
 #   D2 excited: 0.9890
 
 

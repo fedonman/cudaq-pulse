@@ -1,0 +1,223 @@
+<!--
+   SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+   SPDX-License-Identifier: Apache-2.0
+-->
+<svg role="img" aria-labelledby="title desc" xmlns:xlink="http://www.w3.org/1999/xlink" width="407.52pt" height="183.16pt" viewBox="0 0 407.52 183.16" xmlns="http://www.w3.org/2000/svg" version="1.1">
+ <title id="title">The toy QPU: qudits, controllers, lines and the decoder link</title>
+ <desc id="desc">Diagram of the toy QPU. 3 qudits at 5, 5.3, 5.6 GHz and 2 toy.sequencer controllers: controller 0 drives qudits 0 and 1, and one feedline reads qudits 0 and 1; controller 1 drives qudit 2, and a readout line reads qudit 2. An outcome takes 40 cycles from one controller to the other. The decoder link of the control system, drawn to both controllers, takes 4 ns out and 8 ns back. The reference clock is 250 MHz and the program clock 1 GHz.</desc>
+ <defs>
+  <style type="text/css">*{stroke-linejoin: round; stroke-linecap: butt}</style>
+ </defs>
+ <g id="figure_1">
+  <g id="patch_1">
+   <path d="M 0 183.16
+L 407.52 183.16
+L 407.52 -0
+L 0 -0
+L 0 183.16
+z
+" style="fill: none"/>
+  </g>
+  <g id="axes_1">
+   <g id="patch_2">
+    <path d="M 125.10 87.82
+L 203.19 87.82
+Q 207.72 87.82 207.72 83.52
+L 207.72 56.64
+Q 207.72 52.33 203.19 52.33
+L 125.10 52.33
+Q 120.57 52.33 120.57 56.64
+L 120.57 83.52
+Q 120.57 87.82 125.10 87.82
+L 125.10 87.82
+z
+" clip-path="url(#pdb75edb057)" style="fill: none; stroke: #5a6066; stroke-width: 1.2; stroke-linejoin: miter"/>
+   </g>
+   <g id="patch_3">
+    <path d="M 125.10 168.46
+L 203.19 168.46
+Q 207.72 168.46 207.72 164.16
+L 207.72 137.28
+Q 207.72 132.97 203.19 132.97
+L 125.10 132.97
+Q 120.57 132.97 120.57 137.28
+L 120.57 164.16
+Q 120.57 168.46 125.10 168.46
+L 125.10 168.46
+z
+" clip-path="url(#pdb75edb057)" style="fill: none; stroke: #5a6066; stroke-width: 1.2; stroke-linejoin: miter"/>
+   </g>
+   <g id="patch_4">
+    <path d="M 11.93 127.60
+L 64.55 127.60
+Q 69.08 127.60 69.08 123.30
+L 69.08 97.49
+Q 69.08 93.19 64.55 93.19
+L 11.93 93.19
+Q 7.40 93.19 7.40 97.49
+L 7.40 123.30
+Q 7.40 127.60 11.93 127.60
+L 11.93 127.60
+z
+" clip-path="url(#pdb75edb057)" style="fill: none; stroke: #4dd0c4; stroke-width: 1.2; stroke-linejoin: miter"/>
+   </g>
+   <g id="line2d_1">
+    <path d="M 208.28 62.01
+L 314.10 37.82
+" clip-path="url(#pdb75edb057)" style="fill: none; stroke: #76b900; stroke-width: 1.5; stroke-linecap: round"/>
+   </g>
+   <g id="line2d_2">
+    <path d="M 208.28 78.14
+L 314.10 102.33
+" clip-path="url(#pdb75edb057)" style="fill: none; stroke: #76b900; stroke-width: 1.5; stroke-linecap: round"/>
+   </g>
+   <g id="line2d_3">
+    <path d="M 208.28 70.08
+L 295.99 70.08
+" clip-path="url(#pdb75edb057)" style="fill: none; stroke-dasharray: 6,3; stroke-dashoffset: 0; stroke: #f06292; stroke-width: 1.5"/>
+   </g>
+   <g id="line2d_4">
+    <path d="M 295.99 70.08
+L 314.10 48.57
+" clip-path="url(#pdb75edb057)" style="fill: none; stroke-dasharray: 6,3; stroke-dashoffset: 0; stroke: #f06292; stroke-width: 1.5"/>
+   </g>
+   <g id="line2d_5">
+    <path d="M 295.99 70.08
+L 314.10 91.58
+" clip-path="url(#pdb75edb057)" style="fill: none; stroke-dasharray: 6,3; stroke-dashoffset: 0; stroke: #f06292; stroke-width: 1.5"/>
+   </g>
+   <g id="line2d_6">
+    <path d="M 208.28 142.65
+L 314.10 145.34
+" clip-path="url(#pdb75edb057)" style="fill: none; stroke: #76b900; stroke-width: 1.5; stroke-linecap: round"/>
+   </g>
+   <g id="line2d_7">
+    <path d="M 208.28 158.78
+L 295.99 158.78
+" clip-path="url(#pdb75edb057)" style="fill: none; stroke-dasharray: 6,3; stroke-dashoffset: 0; stroke: #f06292; stroke-width: 1.5"/>
+   </g>
+   <g id="line2d_8">
+    <path d="M 295.99 158.78
+L 314.10 156.09
+" clip-path="url(#pdb75edb057)" style="fill: none; stroke-dasharray: 6,3; stroke-dashoffset: 0; stroke: #f06292; stroke-width: 1.5"/>
+   </g>
+   <g id="line2d_9">
+    <defs>
+     <path id="ma2a1761293" d="M 0 15
+C 3.97 15 7.79 13.41 10.60 10.60
+C 13.41 7.79 15 3.97 15 0
+C 15 -3.97 13.41 -7.79 10.60 -10.60
+C 7.79 -13.41 3.97 -15 0 -15
+C -3.97 -15 -7.79 -13.41 -10.60 -10.60
+C -13.41 -7.79 -15 -3.97 -15 0
+C -15 3.97 -13.41 7.79 -10.60 10.60
+C -7.79 13.41 -3.97 15 0 15
+z
+" style="stroke: #eeeeee; stroke-width: 1.4"/>
+    </defs>
+    <g clip-path="url(#pdb75edb057)">
+     <use xlink:href="#ma2a1761293" x="331.07" y="43.2" style="fill-opacity: 0; stroke: #eeeeee; stroke-width: 1.4"/>
+    </g>
+   </g>
+   <g id="line2d_10">
+    <g clip-path="url(#pdb75edb057)">
+     <use xlink:href="#ma2a1761293" x="331.07" y="96.96" style="fill-opacity: 0; stroke: #eeeeee; stroke-width: 1.4"/>
+    </g>
+   </g>
+   <g id="line2d_11">
+    <g clip-path="url(#pdb75edb057)">
+     <use xlink:href="#ma2a1761293" x="331.07" y="150.72" style="fill-opacity: 0; stroke: #eeeeee; stroke-width: 1.4"/>
+    </g>
+   </g>
+   <g id="line2d_12">
+    <path d="M 69.65 110.4
+L 120.01 70.08
+" clip-path="url(#pdb75edb057)" style="fill: none; stroke: #4dd0c4; stroke-width: 1.2; stroke-linecap: round"/>
+   </g>
+   <g id="line2d_13">
+    <path d="M 69.65 110.4
+L 120.01 150.72
+" clip-path="url(#pdb75edb057)" style="fill: none; stroke: #4dd0c4; stroke-width: 1.2; stroke-linecap: round"/>
+   </g>
+   <g id="text_1">
+    <text style="font-size: 9px; font-family:NVIDIA, Arial, Helvetica, sans-serif; text-anchor: middle; fill: #eeeeee" x="164.14" y="64.70" transform="rotate(-0 164.14 64.70)">controller 0</text>
+   </g>
+   <g id="text_2">
+    <text style="font-size: 8px; font-family:NVIDIA, Arial, Helvetica, sans-serif; text-anchor: middle; fill: #b4bac1" x="164.14" y="78.68" transform="rotate(-0 164.14 78.68)">toy.sequencer</text>
+   </g>
+   <g id="text_3">
+    <text style="font-size: 8px; font-family:NVIDIA, Arial, Helvetica, sans-serif; text-anchor: end; fill: #76b900" x="302.78" y="32.13" transform="rotate(-0 302.78 32.13)">drive</text>
+   </g>
+   <g id="text_4">
+    <text style="font-size: 8px; font-family:NVIDIA, Arial, Helvetica, sans-serif; text-anchor: end; fill: #f06292" x="293.16" y="66.00" transform="rotate(-0 293.16 66.00)">one readout feedline</text>
+   </g>
+   <g id="text_5">
+    <text style="font-size: 9px; font-family:NVIDIA, Arial, Helvetica, sans-serif; text-anchor: middle; fill: #eeeeee" x="164.14" y="145.34" transform="rotate(-0 164.14 145.34)">controller 1</text>
+   </g>
+   <g id="text_6">
+    <text style="font-size: 8px; font-family:NVIDIA, Arial, Helvetica, sans-serif; text-anchor: middle; fill: #b4bac1" x="164.14" y="159.32" transform="rotate(-0 164.14 159.32)">toy.sequencer</text>
+   </g>
+   <g id="text_7">
+    <text style="font-size: 8px; font-family:NVIDIA, Arial, Helvetica, sans-serif; text-anchor: end; fill: #76b900" x="302.78" y="139.65" transform="rotate(-0 302.78 139.65)">drive</text>
+   </g>
+   <g id="text_8">
+    <text style="font-size: 8px; font-family:NVIDIA, Arial, Helvetica, sans-serif; text-anchor: end; fill: #f06292" x="293.16" y="167.55" transform="rotate(-0 293.16 167.55)">readout</text>
+   </g>
+   <g id="text_9">
+    <text style="font-size: 9px; font-family:NVIDIA, Arial, Helvetica, sans-serif; text-anchor: middle; fill: #eeeeee" x="331.07" y="45.53" transform="rotate(-0 331.07 45.53)">0</text>
+   </g>
+   <g id="text_10">
+    <text style="font-size: 8px; font-family:NVIDIA, Arial, Helvetica, sans-serif; fill: #b4bac1" transform="translate(354.84 40.47)">qudit 0</text>
+    <text style="font-size: 8px; font-family:NVIDIA, Arial, Helvetica, sans-serif; fill: #b4bac1" transform="translate(354.84 50.07)">5 GHz</text>
+   </g>
+   <g id="text_11">
+    <text style="font-size: 9px; font-family:NVIDIA, Arial, Helvetica, sans-serif; text-anchor: middle; fill: #eeeeee" x="331.07" y="99.29" transform="rotate(-0 331.07 99.29)">1</text>
+   </g>
+   <g id="text_12">
+    <text style="font-size: 8px; font-family:NVIDIA, Arial, Helvetica, sans-serif; fill: #b4bac1" transform="translate(354.84 94.23)">qudit 1</text>
+    <text style="font-size: 8px; font-family:NVIDIA, Arial, Helvetica, sans-serif; fill: #b4bac1" transform="translate(354.84 103.83)">5.3 GHz</text>
+   </g>
+   <g id="text_13">
+    <text style="font-size: 9px; font-family:NVIDIA, Arial, Helvetica, sans-serif; text-anchor: middle; fill: #eeeeee" x="331.07" y="153.05" transform="rotate(-0 331.07 153.05)">2</text>
+   </g>
+   <g id="text_14">
+    <text style="font-size: 8px; font-family:NVIDIA, Arial, Helvetica, sans-serif; fill: #b4bac1" transform="translate(354.84 147.99)">qudit 2</text>
+    <text style="font-size: 8px; font-family:NVIDIA, Arial, Helvetica, sans-serif; fill: #b4bac1" transform="translate(354.84 157.59)">5.6 GHz</text>
+   </g>
+   <g id="patch_5">
+    <path d="M 164.14 91.47
+Q 164.14 110.39 164.14 129.32
+" style="fill: none; stroke: #b4bac1; stroke-linecap: round"/>
+    <path d="M 162.34 95.07
+L 164.14 91.47
+L 165.94 95.07
+z
+" style="fill: #b4bac1; stroke: #b4bac1; stroke-linecap: round"/>
+    <path d="M 165.94 125.72
+L 164.14 129.32
+L 162.34 125.72
+z
+" style="fill: #b4bac1; stroke: #b4bac1; stroke-linecap: round"/>
+   </g>
+   <g id="text_15">
+    <text style="font-size: 8px; font-family:NVIDIA, Arial, Helvetica, sans-serif; text-anchor: start; fill: #b4bac1" x="169.80" y="112.47" transform="rotate(-0 169.80 112.47)">outcomes: 40 cycles</text>
+   </g>
+   <g id="text_16">
+    <text style="font-size: 9px; font-family:NVIDIA, Arial, Helvetica, sans-serif; fill: #4dd0c4" transform="translate(19.91 107.33)">decoder</text>
+    <text style="font-size: 9px; font-family:NVIDIA, Arial, Helvetica, sans-serif; fill: #4dd0c4" transform="translate(30.28 118.13)">link</text>
+   </g>
+   <g id="text_17">
+    <text style="font-size: 8px; font-family:NVIDIA, Arial, Helvetica, sans-serif; fill: #4dd0c4" transform="translate(20.71 139.85)">4 ns out,</text>
+    <text style="font-size: 8px; font-family:NVIDIA, Arial, Helvetica, sans-serif; fill: #4dd0c4" transform="translate(19.03 149.46)">8 ns back</text>
+   </g>
+   <g id="text_18">
+    <text style="font-size: 8px; font-family:NVIDIA, Arial, Helvetica, sans-serif; text-anchor: middle; fill: #b4bac1" x="164.14" y="10.94" transform="rotate(-0 164.14 10.94)">reference clock 250 MHz, program clock 1 GHz</text>
+   </g>
+  </g>
+ </g>
+ <defs>
+  <clipPath id="pdb75edb057">
+   <rect x="2.88" y="2.88" width="401.76" height="177.40"/>
+  </clipPath>
+ </defs>
+</svg>

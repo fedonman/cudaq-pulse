@@ -329,6 +329,18 @@ nothing. The
 timeline (``ScheduledKernel.timeline()``) draws each link as a row of its own,
 labelled with its name.
 
+.. themed-figure:: figures/call_submit_take.svg
+   :alt: Timeline of feed_forward on a drive line, a readout line and the gpu link. The readout ends at 500 ns and decode is submitted then; the request holds the link for 102.5 ns, the answer has a timeout of 4000 ns and 50 ns of feedback, and it is due at 4652.5 ns, 4152.5 ns after its submission, where the correction pulse starts, dashed because it plays only on some outcomes. A second panel shows 4502.5 to 4722.5 ns closer: the end of the timeout, the feedback and the pulse.
+   :width: 100%
+
+   ``feed_forward`` of `Calling from a kernel`_, compiled with the ``gpu``
+   link of `Links`_. The request is submitted when the readout ends and
+   holds the link; the answer is due after the timeout and the link's
+   feedback time, and the correction, dashed because it plays only on some
+   outcomes, starts then. The time at the right of the link's row is from
+   the submission to the answer. The lower panel shows the shaded end of
+   the upper one.
+
 After scheduling, ``pulse-classical-check`` verifies that every request and
 answer fits its link's slots, that deadlines and reaction times hold, that no
 answer is taken before it is due, that no link holds more requests than

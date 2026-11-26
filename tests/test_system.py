@@ -889,6 +889,28 @@ def test_a_qudit_s_drive_and_readout_round_trip_through_the_system_file():
     assert moved.fingerprint != dev.fingerprint
 
 
+def test_a_system_file_holds_a_drive_of_no_stated_modality():
+    drive = pulse.quantum_systems.Drive(amplitude_scale_rad_per_ns=0.3)
+    qudits = {0: PhysicalQudit(0, 5.0e9, 50.0, 30.0, anharmonicity_hz=-2e8, drive=drive)}
+    dev = pulse.quantum_system(name="plain", qudits=qudits)
+    written = dev.as_dict()["qudits"][0]["drive"]
+    assert written == {"kind": "drive", "amplitude_scale_rad_per_ns": 0.3}
+    back = pulse.QuantumSystem.from_dict(json.loads(json.dumps(dev.as_dict())))
+    assert back.physical_qudits[0].drive == drive and back.fingerprint == dev.fingerprint
+    microwave = qudits[0].replace(drive=MicrowaveDrive(amplitude_scale_rad_per_ns=0.3))
+    other = pulse.quantum_system(name="plain", qudits={0: microwave})
+    assert other.fingerprint != dev.fingerprint
+    # Each kind reads back as its own class, from the same scale.
+    for system, kind, made in (
+        (dev, "drive", pulse.quantum_systems.Drive),
+        (other, "microwave", MicrowaveDrive),
+    ):
+        data = json.loads(json.dumps(system.as_dict()))
+        assert data["qudits"][0]["drive"]["kind"] == kind
+        read = pulse.QuantumSystem.from_dict(data).physical_qudits[0].drive
+        assert type(read) is made and read.amplitude_scale_rad_per_ns == 0.3
+
+
 def test_a_system_file_refuses_an_unknown_component_kind_or_field():
     data = pulse.quantum_system(
         name="ro", qudits={0: PhysicalQudit(0, 5.0e9, 50.0, 30.0, anharmonicity_hz=-2e8)}
@@ -900,6 +922,9 @@ def test_a_system_file_refuses_an_unknown_component_kind_or_field():
         pulse.QuantumSystem.from_dict(data)
     message = str(found.value)
     assert "qudits[0].readout.kind" in message and "the kinds are dispersive" in message
+    qudit["drive"] = {"kind": "optical"}
+    with pytest.raises(QuantumSystemDefinitionError, match="the kinds are microwave, drive"):
+        pulse.QuantumSystem.from_dict(data)
     assert "qudits[0].drive.amplitude_scale" in message
     assert "did you mean 'amplitude_scale_rad_per_ns'" in message
 

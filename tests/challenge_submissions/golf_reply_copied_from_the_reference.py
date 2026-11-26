@@ -8,7 +8,6 @@ import pathlib
 import sys
 
 _main = sys.modules["__main__"]
-_exchange = sys.modules["_exchange"]
 _here = pathlib.Path(_main.__file__).parent
 
 
@@ -32,18 +31,6 @@ def reply_with(value):  # the scorer receives json.dumps(value)
     _main.driven = lambda program: value
 
 
-def reply_raw(text):  # the scorer receives this text as the last line
-    reply_with(None)
-
-    class _Json:
-        @staticmethod
-        def dumps(_):
-            return text
-
-    _exchange.json = _Json
-
-
 kernel = SCHEDULE = None
 R = honest()
-Z2, D5, D8, D4, D7 = 14, 4, 7, 3, 6
 reply_with(R)

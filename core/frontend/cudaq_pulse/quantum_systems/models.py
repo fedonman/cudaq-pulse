@@ -94,14 +94,14 @@ class SimulationModel:
     def energies_hz(self, qudit: PhysicalQudit, levels: int) -> list[float]:
         """The energies of *qudit*'s first *levels* levels, in Hz from its ground
         level: evenly spaced by its 0-1 frequency."""
-        return [k * qudit.frequency_hz for k in range(levels)]
+        return [k * qudit._frame_hz for k in range(levels)]
 
     def transitions_hz(self, qudit: PhysicalQudit, levels: int) -> dict[tuple[int, int], float]:
         """The frequency in Hz of each transition between *qudit*'s first
         *levels* levels, by ``(lower, upper)`` level, ordered by level."""
         energies = self.energies_hz(qudit, levels)
         return {
-            (lower, upper): abs(energies[upper] - energies[lower])
+            (lower, upper): energies[upper] - energies[lower]
             for lower in range(levels)
             for upper in range(lower + 1, levels)
         }
@@ -133,7 +133,7 @@ class TransmonModel(SimulationModel):
     __slots__ = ()
 
     def energies_hz(self, qudit: PhysicalQudit, levels: int) -> list[float]:
-        f01, alpha = qudit.frequency_hz, qudit.anharmonicity_hz
+        f01, alpha = qudit._frame_hz, qudit.anharmonicity_hz
         if alpha is None:
             if levels > 2:
                 raise InvalidValueError(

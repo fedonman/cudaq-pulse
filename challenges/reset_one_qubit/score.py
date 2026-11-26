@@ -67,7 +67,8 @@ def check(drives, readouts, waits, others, system, qudit, calibrated):
     """(problems, the end of the last pulse, readout or wait in ns) of what is played."""
     to_ns = 1.0 / system.clock_ghz
     latency = round(LATENCY_NS * system.clock_ghz)
-    native = system.qudit_freq[qudit.index]
+    # D1's drive tone: its 0-1 frequency dressed by its couplings.
+    native = qudit.dressed_frequency_hz
     problems = [
         f"it has {kind}; only pulses, waits and readouts of {QUBIT} are played" for kind in others
     ]

@@ -118,7 +118,7 @@ Simulate it on the CPU, with a step fine enough for the pair's detuning:
    :class: output
 
    dimensions: (3, 3)
-   X1 excited: 0.4945
+   X1 excited: 0.4944
    D2 excited: 0.9890
 
 What to notice:
@@ -198,7 +198,7 @@ You can see the last stage on any machine:
 
 .. pulse-visual:: figures/gpu_simulation.json
    :scene: lowering
-   :alt: One program, lowered for the GPU and exported. The kernel as written: pulses, waits and syncs on its lines. It holds 21 operations. QOp writes the pair's Hamiltonian and the Lindblad terms of its decay. It holds 82 operations. The cuDensityMat dialect is the cuDensityMat API as IR. It holds 122 operations. LLVM IR turns each of its operations into a call into the cuDensityMat runtime. It holds 1641 operations, 88 of them calls into cuDensityMat. From the same Pulse MLIR, the program exports for a controller as 5 events. Only the last steps differ.
+   :alt: One program, lowered for the GPU and exported. The kernel as written: pulses, waits and syncs on its lines. It holds 21 operations. QOp writes the pair's Hamiltonian and the Lindblad terms of its decay. It holds 82 operations. The cuDensityMat dialect is the cuDensityMat API as IR. It holds 122 operations. LLVM IR turns each of its operations into a call into the cuDensityMat runtime. It holds 1643 operations, 88 of them calls into cuDensityMat. From the same Pulse MLIR, the program exports for a controller as 5 events. Only the last steps differ.
 
    ``evolve_pair`` at each level of ``mlir()``, one stage at a time, with
    the operations each holds, counted from its text.

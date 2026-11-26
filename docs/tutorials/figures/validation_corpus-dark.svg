@@ -2,19 +2,19 @@
    SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
    SPDX-License-Identifier: Apache-2.0
 -->
-<svg role="img" aria-labelledby="title desc" xmlns:xlink="http://www.w3.org/1999/xlink" width="407.52pt" height="198.69pt" viewBox="0 0 407.52 198.69" xmlns="http://www.w3.org/2000/svg" version="1.1">
+<svg role="img" aria-labelledby="title desc" xmlns:xlink="http://www.w3.org/1999/xlink" width="407.52pt" height="216.43pt" viewBox="0 0 407.52 216.43" xmlns="http://www.w3.org/2000/svg" version="1.1">
  <title id="title">The validation corpus</title>
- <desc id="desc">The 18 programs of the validation corpus and what the text backend does with each: play, passed; readout, passed; wait, passed; sync, passed; loop, passed; call, refused; answer, refused; frame_update, refused; branch, refused; answer_timeout, refused; timeout_function, refused; runtime, refused; runtime_frequency, refused; shared_line, passed; several_controllers[0], passed; several_controllers[1], passed; unsupported_event, passed; newer_format, passed. 10 pass and 8 are refused cleanly; none fail.</desc>
+ <desc id="desc">The 20 programs of the validation corpus and what the text backend does with each: play, passed; readout, passed; wait, passed; sync, passed; loop, passed; call, refused; answer, refused; frame_update, refused; branch, refused; answer_timeout, refused; timeout_function, refused; runtime, refused; runtime_frequency, refused; shared_line, passed; shared_drive_line_two_tones, passed; shared_drive_line_one_tone, passed; several_controllers[0], passed; several_controllers[1], passed; unsupported_event, passed; newer_format, passed. 12 pass and 8 are refused cleanly; none fail.</desc>
  <defs>
   <style type="text/css">*{stroke-linejoin: round; stroke-linecap: butt}</style>
  </defs>
  <g id="figure_1">
   <g id="patch_1">
-   <path d="M 0 198.69
-L 407.52 198.69
+   <path d="M 0 216.43
+L 407.52 216.43
 L 407.52 0
 L 0 0
-L 0 198.69
+L 0 216.43
 z
 " style="fill: none"/>
   </g>
@@ -33,28 +33,28 @@ C -1.55 2.68 -0.79 3 0 3
 z
 " style="stroke: #000000; stroke-opacity: 0"/>
     </defs>
-    <g clip-path="url(#p43c8ad9297)">
-     <use xlink:href="#ma257e27481" x="12.67" y="15.46" style="fill: #4dd0c4; stroke: #000000; stroke-opacity: 0"/>
+    <g clip-path="url(#pc2cffd3fc6)">
+     <use xlink:href="#ma257e27481" x="12.67" y="15.27" style="fill: #4dd0c4; stroke: #000000; stroke-opacity: 0"/>
     </g>
    </g>
    <g id="line2d_2">
-    <g clip-path="url(#p43c8ad9297)">
-     <use xlink:href="#ma257e27481" x="12.67" y="36.43" style="fill: #4dd0c4; stroke: #000000; stroke-opacity: 0"/>
+    <g clip-path="url(#pc2cffd3fc6)">
+     <use xlink:href="#ma257e27481" x="12.67" y="35.92" style="fill: #4dd0c4; stroke: #000000; stroke-opacity: 0"/>
     </g>
    </g>
    <g id="line2d_3">
-    <g clip-path="url(#p43c8ad9297)">
-     <use xlink:href="#ma257e27481" x="12.67" y="57.40" style="fill: #4dd0c4; stroke: #000000; stroke-opacity: 0"/>
+    <g clip-path="url(#pc2cffd3fc6)">
+     <use xlink:href="#ma257e27481" x="12.67" y="56.58" style="fill: #4dd0c4; stroke: #000000; stroke-opacity: 0"/>
     </g>
    </g>
    <g id="line2d_4">
-    <g clip-path="url(#p43c8ad9297)">
-     <use xlink:href="#ma257e27481" x="12.67" y="78.37" style="fill: #4dd0c4; stroke: #000000; stroke-opacity: 0"/>
+    <g clip-path="url(#pc2cffd3fc6)">
+     <use xlink:href="#ma257e27481" x="12.67" y="77.23" style="fill: #4dd0c4; stroke: #000000; stroke-opacity: 0"/>
     </g>
    </g>
    <g id="line2d_5">
-    <g clip-path="url(#p43c8ad9297)">
-     <use xlink:href="#ma257e27481" x="12.67" y="99.34" style="fill: #4dd0c4; stroke: #000000; stroke-opacity: 0"/>
+    <g clip-path="url(#pc2cffd3fc6)">
+     <use xlink:href="#ma257e27481" x="12.67" y="97.88" style="fill: #4dd0c4; stroke: #000000; stroke-opacity: 0"/>
     </g>
    </g>
    <g id="line2d_6">
@@ -66,129 +66,145 @@ L -3 -3
 z
 " style="stroke: #000000; stroke-opacity: 0; stroke-linejoin: miter"/>
     </defs>
-    <g clip-path="url(#p43c8ad9297)">
-     <use xlink:href="#m304c7ad7c6" x="12.67" y="120.31" style="fill: #b4bac1; stroke: #000000; stroke-opacity: 0; stroke-linejoin: miter"/>
+    <g clip-path="url(#pc2cffd3fc6)">
+     <use xlink:href="#m304c7ad7c6" x="12.67" y="118.54" style="fill: #b4bac1; stroke: #000000; stroke-opacity: 0; stroke-linejoin: miter"/>
     </g>
    </g>
    <g id="line2d_7">
-    <g clip-path="url(#p43c8ad9297)">
-     <use xlink:href="#m304c7ad7c6" x="12.67" y="141.28" style="fill: #b4bac1; stroke: #000000; stroke-opacity: 0; stroke-linejoin: miter"/>
+    <g clip-path="url(#pc2cffd3fc6)">
+     <use xlink:href="#m304c7ad7c6" x="12.67" y="139.19" style="fill: #b4bac1; stroke: #000000; stroke-opacity: 0; stroke-linejoin: miter"/>
     </g>
    </g>
    <g id="line2d_8">
-    <g clip-path="url(#p43c8ad9297)">
-     <use xlink:href="#m304c7ad7c6" x="12.67" y="162.25" style="fill: #b4bac1; stroke: #000000; stroke-opacity: 0; stroke-linejoin: miter"/>
+    <g clip-path="url(#pc2cffd3fc6)">
+     <use xlink:href="#m304c7ad7c6" x="12.67" y="159.85" style="fill: #b4bac1; stroke: #000000; stroke-opacity: 0; stroke-linejoin: miter"/>
     </g>
    </g>
    <g id="line2d_9">
-    <g clip-path="url(#p43c8ad9297)">
-     <use xlink:href="#m304c7ad7c6" x="12.67" y="183.22" style="fill: #b4bac1; stroke: #000000; stroke-opacity: 0; stroke-linejoin: miter"/>
+    <g clip-path="url(#pc2cffd3fc6)">
+     <use xlink:href="#m304c7ad7c6" x="12.67" y="180.50" style="fill: #b4bac1; stroke: #000000; stroke-opacity: 0; stroke-linejoin: miter"/>
     </g>
    </g>
    <g id="line2d_10">
-    <g clip-path="url(#p43c8ad9297)">
-     <use xlink:href="#m304c7ad7c6" x="208.65" y="15.46" style="fill: #b4bac1; stroke: #000000; stroke-opacity: 0; stroke-linejoin: miter"/>
+    <g clip-path="url(#pc2cffd3fc6)">
+     <use xlink:href="#m304c7ad7c6" x="12.67" y="201.15" style="fill: #b4bac1; stroke: #000000; stroke-opacity: 0; stroke-linejoin: miter"/>
     </g>
    </g>
    <g id="line2d_11">
-    <g clip-path="url(#p43c8ad9297)">
-     <use xlink:href="#m304c7ad7c6" x="208.65" y="36.43" style="fill: #b4bac1; stroke: #000000; stroke-opacity: 0; stroke-linejoin: miter"/>
+    <g clip-path="url(#pc2cffd3fc6)">
+     <use xlink:href="#m304c7ad7c6" x="208.65" y="15.27" style="fill: #b4bac1; stroke: #000000; stroke-opacity: 0; stroke-linejoin: miter"/>
     </g>
    </g>
    <g id="line2d_12">
-    <g clip-path="url(#p43c8ad9297)">
-     <use xlink:href="#m304c7ad7c6" x="208.65" y="57.40" style="fill: #b4bac1; stroke: #000000; stroke-opacity: 0; stroke-linejoin: miter"/>
+    <g clip-path="url(#pc2cffd3fc6)">
+     <use xlink:href="#m304c7ad7c6" x="208.65" y="35.92" style="fill: #b4bac1; stroke: #000000; stroke-opacity: 0; stroke-linejoin: miter"/>
     </g>
    </g>
    <g id="line2d_13">
-    <g clip-path="url(#p43c8ad9297)">
-     <use xlink:href="#m304c7ad7c6" x="208.65" y="78.37" style="fill: #b4bac1; stroke: #000000; stroke-opacity: 0; stroke-linejoin: miter"/>
+    <g clip-path="url(#pc2cffd3fc6)">
+     <use xlink:href="#m304c7ad7c6" x="208.65" y="56.58" style="fill: #b4bac1; stroke: #000000; stroke-opacity: 0; stroke-linejoin: miter"/>
     </g>
    </g>
    <g id="line2d_14">
-    <g clip-path="url(#p43c8ad9297)">
-     <use xlink:href="#ma257e27481" x="208.65" y="99.34" style="fill: #4dd0c4; stroke: #000000; stroke-opacity: 0"/>
+    <g clip-path="url(#pc2cffd3fc6)">
+     <use xlink:href="#ma257e27481" x="208.65" y="77.23" style="fill: #4dd0c4; stroke: #000000; stroke-opacity: 0"/>
     </g>
    </g>
    <g id="line2d_15">
-    <g clip-path="url(#p43c8ad9297)">
-     <use xlink:href="#ma257e27481" x="208.65" y="120.31" style="fill: #4dd0c4; stroke: #000000; stroke-opacity: 0"/>
+    <g clip-path="url(#pc2cffd3fc6)">
+     <use xlink:href="#ma257e27481" x="208.65" y="97.88" style="fill: #4dd0c4; stroke: #000000; stroke-opacity: 0"/>
     </g>
    </g>
    <g id="line2d_16">
-    <g clip-path="url(#p43c8ad9297)">
-     <use xlink:href="#ma257e27481" x="208.65" y="141.28" style="fill: #4dd0c4; stroke: #000000; stroke-opacity: 0"/>
+    <g clip-path="url(#pc2cffd3fc6)">
+     <use xlink:href="#ma257e27481" x="208.65" y="118.54" style="fill: #4dd0c4; stroke: #000000; stroke-opacity: 0"/>
     </g>
    </g>
    <g id="line2d_17">
-    <g clip-path="url(#p43c8ad9297)">
-     <use xlink:href="#ma257e27481" x="208.65" y="162.25" style="fill: #4dd0c4; stroke: #000000; stroke-opacity: 0"/>
+    <g clip-path="url(#pc2cffd3fc6)">
+     <use xlink:href="#ma257e27481" x="208.65" y="139.19" style="fill: #4dd0c4; stroke: #000000; stroke-opacity: 0"/>
     </g>
    </g>
    <g id="line2d_18">
-    <g clip-path="url(#p43c8ad9297)">
-     <use xlink:href="#ma257e27481" x="208.65" y="183.22" style="fill: #4dd0c4; stroke: #000000; stroke-opacity: 0"/>
+    <g clip-path="url(#pc2cffd3fc6)">
+     <use xlink:href="#ma257e27481" x="208.65" y="159.85" style="fill: #4dd0c4; stroke: #000000; stroke-opacity: 0"/>
+    </g>
+   </g>
+   <g id="line2d_19">
+    <g clip-path="url(#pc2cffd3fc6)">
+     <use xlink:href="#ma257e27481" x="208.65" y="180.50" style="fill: #4dd0c4; stroke: #000000; stroke-opacity: 0"/>
+    </g>
+   </g>
+   <g id="line2d_20">
+    <g clip-path="url(#pc2cffd3fc6)">
+     <use xlink:href="#ma257e27481" x="208.65" y="201.15" style="fill: #4dd0c4; stroke: #000000; stroke-opacity: 0"/>
     </g>
    </g>
    <g id="text_1">
-    <text style="font-size: 8px; font-family:NVIDIA, Arial, Helvetica, sans-serif; text-anchor: start; fill: #eeeeee" x="20.51" y="17.54" transform="rotate(-0 20.51 17.54)">play: passed</text>
+    <text style="font-size: 8px; font-family:NVIDIA, Arial, Helvetica, sans-serif; text-anchor: start; fill: #eeeeee" x="20.51" y="17.35" transform="rotate(-0 20.51 17.35)">play: passed</text>
    </g>
    <g id="text_2">
-    <text style="font-size: 8px; font-family:NVIDIA, Arial, Helvetica, sans-serif; text-anchor: start; fill: #eeeeee" x="20.51" y="38.51" transform="rotate(-0 20.51 38.51)">readout: passed</text>
+    <text style="font-size: 8px; font-family:NVIDIA, Arial, Helvetica, sans-serif; text-anchor: start; fill: #eeeeee" x="20.51" y="38.00" transform="rotate(-0 20.51 38.00)">readout: passed</text>
    </g>
    <g id="text_3">
-    <text style="font-size: 8px; font-family:NVIDIA, Arial, Helvetica, sans-serif; text-anchor: start; fill: #eeeeee" x="20.51" y="59.48" transform="rotate(-0 20.51 59.48)">wait: passed</text>
+    <text style="font-size: 8px; font-family:NVIDIA, Arial, Helvetica, sans-serif; text-anchor: start; fill: #eeeeee" x="20.51" y="58.65" transform="rotate(-0 20.51 58.65)">wait: passed</text>
    </g>
    <g id="text_4">
-    <text style="font-size: 8px; font-family:NVIDIA, Arial, Helvetica, sans-serif; text-anchor: start; fill: #eeeeee" x="20.51" y="80.45" transform="rotate(-0 20.51 80.45)">sync: passed</text>
+    <text style="font-size: 8px; font-family:NVIDIA, Arial, Helvetica, sans-serif; text-anchor: start; fill: #eeeeee" x="20.51" y="79.31" transform="rotate(-0 20.51 79.31)">sync: passed</text>
    </g>
    <g id="text_5">
-    <text style="font-size: 8px; font-family:NVIDIA, Arial, Helvetica, sans-serif; text-anchor: start; fill: #eeeeee" x="20.51" y="101.42" transform="rotate(-0 20.51 101.42)">loop: passed</text>
+    <text style="font-size: 8px; font-family:NVIDIA, Arial, Helvetica, sans-serif; text-anchor: start; fill: #eeeeee" x="20.51" y="99.96" transform="rotate(-0 20.51 99.96)">loop: passed</text>
    </g>
    <g id="text_6">
-    <text style="font-size: 8px; font-family:NVIDIA, Arial, Helvetica, sans-serif; text-anchor: start; fill: #eeeeee" x="20.51" y="122.39" transform="rotate(-0 20.51 122.39)">call: refused</text>
+    <text style="font-size: 8px; font-family:NVIDIA, Arial, Helvetica, sans-serif; text-anchor: start; fill: #eeeeee" x="20.51" y="120.62" transform="rotate(-0 20.51 120.62)">call: refused</text>
    </g>
    <g id="text_7">
-    <text style="font-size: 8px; font-family:NVIDIA, Arial, Helvetica, sans-serif; text-anchor: start; fill: #eeeeee" x="20.51" y="143.36" transform="rotate(-0 20.51 143.36)">answer: refused</text>
+    <text style="font-size: 8px; font-family:NVIDIA, Arial, Helvetica, sans-serif; text-anchor: start; fill: #eeeeee" x="20.51" y="141.27" transform="rotate(-0 20.51 141.27)">answer: refused</text>
    </g>
    <g id="text_8">
-    <text style="font-size: 8px; font-family:NVIDIA, Arial, Helvetica, sans-serif; text-anchor: start; fill: #eeeeee" x="20.51" y="164.33" transform="rotate(-0 20.51 164.33)">frame_update: refused</text>
+    <text style="font-size: 8px; font-family:NVIDIA, Arial, Helvetica, sans-serif; text-anchor: start; fill: #eeeeee" x="20.51" y="161.92" transform="rotate(-0 20.51 161.92)">frame_update: refused</text>
    </g>
    <g id="text_9">
-    <text style="font-size: 8px; font-family:NVIDIA, Arial, Helvetica, sans-serif; text-anchor: start; fill: #eeeeee" x="20.51" y="185.30" transform="rotate(-0 20.51 185.30)">branch: refused</text>
+    <text style="font-size: 8px; font-family:NVIDIA, Arial, Helvetica, sans-serif; text-anchor: start; fill: #eeeeee" x="20.51" y="182.58" transform="rotate(-0 20.51 182.58)">branch: refused</text>
    </g>
    <g id="text_10">
-    <text style="font-size: 8px; font-family:NVIDIA, Arial, Helvetica, sans-serif; text-anchor: start; fill: #eeeeee" x="216.49" y="17.54" transform="rotate(-0 216.49 17.54)">answer_timeout: refused</text>
+    <text style="font-size: 8px; font-family:NVIDIA, Arial, Helvetica, sans-serif; text-anchor: start; fill: #eeeeee" x="20.51" y="203.23" transform="rotate(-0 20.51 203.23)">answer_timeout: refused</text>
    </g>
    <g id="text_11">
-    <text style="font-size: 8px; font-family:NVIDIA, Arial, Helvetica, sans-serif; text-anchor: start; fill: #eeeeee" x="216.49" y="38.51" transform="rotate(-0 216.49 38.51)">timeout_function: refused</text>
+    <text style="font-size: 8px; font-family:NVIDIA, Arial, Helvetica, sans-serif; text-anchor: start; fill: #eeeeee" x="216.49" y="17.35" transform="rotate(-0 216.49 17.35)">timeout_function: refused</text>
    </g>
    <g id="text_12">
-    <text style="font-size: 8px; font-family:NVIDIA, Arial, Helvetica, sans-serif; text-anchor: start; fill: #eeeeee" x="216.49" y="59.48" transform="rotate(-0 216.49 59.48)">runtime: refused</text>
+    <text style="font-size: 8px; font-family:NVIDIA, Arial, Helvetica, sans-serif; text-anchor: start; fill: #eeeeee" x="216.49" y="38.00" transform="rotate(-0 216.49 38.00)">runtime: refused</text>
    </g>
    <g id="text_13">
-    <text style="font-size: 8px; font-family:NVIDIA, Arial, Helvetica, sans-serif; text-anchor: start; fill: #eeeeee" x="216.49" y="80.45" transform="rotate(-0 216.49 80.45)">runtime_frequency: refused</text>
+    <text style="font-size: 8px; font-family:NVIDIA, Arial, Helvetica, sans-serif; text-anchor: start; fill: #eeeeee" x="216.49" y="58.65" transform="rotate(-0 216.49 58.65)">runtime_frequency: refused</text>
    </g>
    <g id="text_14">
-    <text style="font-size: 8px; font-family:NVIDIA, Arial, Helvetica, sans-serif; text-anchor: start; fill: #eeeeee" x="216.49" y="101.42" transform="rotate(-0 216.49 101.42)">shared_line: passed</text>
+    <text style="font-size: 8px; font-family:NVIDIA, Arial, Helvetica, sans-serif; text-anchor: start; fill: #eeeeee" x="216.49" y="79.31" transform="rotate(-0 216.49 79.31)">shared_line: passed</text>
    </g>
    <g id="text_15">
-    <text style="font-size: 8px; font-family:NVIDIA, Arial, Helvetica, sans-serif; text-anchor: start; fill: #eeeeee" x="216.49" y="122.39" transform="rotate(-0 216.49 122.39)">several_controllers[0]: passed</text>
+    <text style="font-size: 8px; font-family:NVIDIA, Arial, Helvetica, sans-serif; text-anchor: start; fill: #eeeeee" x="216.49" y="99.96" transform="rotate(-0 216.49 99.96)">shared_drive_line_two_tones: passed</text>
    </g>
    <g id="text_16">
-    <text style="font-size: 8px; font-family:NVIDIA, Arial, Helvetica, sans-serif; text-anchor: start; fill: #eeeeee" x="216.49" y="143.36" transform="rotate(-0 216.49 143.36)">several_controllers[1]: passed</text>
+    <text style="font-size: 8px; font-family:NVIDIA, Arial, Helvetica, sans-serif; text-anchor: start; fill: #eeeeee" x="216.49" y="120.62" transform="rotate(-0 216.49 120.62)">shared_drive_line_one_tone: passed</text>
    </g>
    <g id="text_17">
-    <text style="font-size: 8px; font-family:NVIDIA, Arial, Helvetica, sans-serif; text-anchor: start; fill: #eeeeee" x="216.49" y="164.33" transform="rotate(-0 216.49 164.33)">unsupported_event: passed</text>
+    <text style="font-size: 8px; font-family:NVIDIA, Arial, Helvetica, sans-serif; text-anchor: start; fill: #eeeeee" x="216.49" y="141.27" transform="rotate(-0 216.49 141.27)">several_controllers[0]: passed</text>
    </g>
    <g id="text_18">
-    <text style="font-size: 8px; font-family:NVIDIA, Arial, Helvetica, sans-serif; text-anchor: start; fill: #eeeeee" x="216.49" y="185.30" transform="rotate(-0 216.49 185.30)">newer_format: passed</text>
+    <text style="font-size: 8px; font-family:NVIDIA, Arial, Helvetica, sans-serif; text-anchor: start; fill: #eeeeee" x="216.49" y="161.92" transform="rotate(-0 216.49 161.92)">several_controllers[1]: passed</text>
+   </g>
+   <g id="text_19">
+    <text style="font-size: 8px; font-family:NVIDIA, Arial, Helvetica, sans-serif; text-anchor: start; fill: #eeeeee" x="216.49" y="182.58" transform="rotate(-0 216.49 182.58)">unsupported_event: passed</text>
+   </g>
+   <g id="text_20">
+    <text style="font-size: 8px; font-family:NVIDIA, Arial, Helvetica, sans-serif; text-anchor: start; fill: #eeeeee" x="216.49" y="203.23" transform="rotate(-0 216.49 203.23)">newer_format: passed</text>
    </g>
   </g>
  </g>
  <defs>
-  <clipPath id="p43c8ad9297">
-   <rect x="2.88" y="2.88" width="401.76" height="192.93"/>
+  <clipPath id="pc2cffd3fc6">
+   <rect x="2.88" y="2.88" width="401.76" height="210.67"/>
   </clipPath>
  </defs>
 </svg>

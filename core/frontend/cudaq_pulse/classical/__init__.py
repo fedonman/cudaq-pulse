@@ -329,9 +329,9 @@ _LIST_KIND: dict[Any, int] = {
 }
 
 
+# The list kind of a ``typing.Sequence[...]`` hint, which is not equal
+# to the ``collections.abc`` one it stands for.
 def _sequence_kind(t: Any) -> int | None:
-    """The list kind of a ``typing.Sequence[...]`` hint, which is not equal
-    to the ``collections.abc`` one it stands for."""
     if getattr(t, "_name", None) == "Sequence" and typing.get_origin(t) is collections.abc.Sequence:
         return _LIST_KIND.get(collections.abc.Sequence[t.__args__])
     return None
@@ -364,10 +364,10 @@ _HINTS: dict[tuple[int, str], Any] = {}
 _BUILTIN_NAMES = {"float": float, "int": int, "bool": bool, "complex": complex, "None": None}
 
 
+# An annotation's value. A ``from __future__`` string is looked up when
+# it is a plain or dotted name or a one-level ``list[...]``/``tuple[...]``,
+# else evaluated; each is read once per module and string.
 def _hint(t: Any, fn: Any) -> Any:
-    """An annotation's value. A ``from __future__`` string is looked up when
-    it is a plain or dotted name or a one-level ``list[...]``/``tuple[...]``,
-    else evaluated; each is read once per module and string."""
     if t.__class__ is not str:
         return t
     g = fn.__globals__
@@ -381,7 +381,7 @@ def _hint(t: Any, fn: Any) -> Any:
         value = _subscript(t, g)
     if value is _NOT_A_NAME:
         try:
-            value = eval(t, g)  # noqa: S307 - the function's own annotation
+            value = eval(t, g)  # the function's own annotation
         except Exception as error:
             raise InvalidTypeError(
                 f"{fn.__qualname__}: can't read the type hint {t!r} ({error}); a hint is read"
@@ -410,9 +410,9 @@ def _name(t: str, g: dict[str, Any]) -> Any:
     return value
 
 
+# ``tuple[float, float]``, ``list[int]`` or ``pulse.Length[pulse.Bits,
+# 8]``, one level deep, without eval.
 def _subscript(t: str, g: dict[str, Any]) -> Any:
-    """``tuple[float, float]``, ``list[int]`` or ``pulse.Length[pulse.Bits,
-    8]``, one level deep, without eval."""
     i = t.find("[")
     if i <= 0 or t[-1] != "]" or "[" in t[i + 1 :]:
         return _NOT_A_NAME
@@ -474,9 +474,9 @@ class _Shape:
         self.unsized, self.rules = unsized, rules
 
 
+# Read a function's annotations from ``__code__`` and
+# ``__annotations__`` (no ``inspect.signature`` or ``get_type_hints``).
 def _read_hints(fn: Any) -> _Shape:
-    """Read a function's annotations from ``__code__`` and
-    ``__annotations__`` (no ``inspect.signature`` or ``get_type_hints``)."""
     where = fn.__qualname__
     code = fn.__code__
     if code.co_flags & _VARIADIC or code.co_kwonlyargcount:
@@ -535,9 +535,9 @@ def _read_hints(fn: Any) -> _Shape:
     return _Shape(tuple(names), tuple(plan), tuple(results), unsized, rules)
 
 
+# A parameter of fixed length, ``pulse.Length[kind, n]``: *n*
+# measurements read as bits for ``pulse.Bits``, else *n* numbers.
 def _stated_parameter(where: str, name: str, t: Any) -> ValueType:
-    """A parameter of fixed length, ``pulse.Length[kind, n]``: *n*
-    measurements read as bits for ``pulse.Bits``, else *n* numbers."""
     if typing.get_origin(t) is not typing.Annotated:
         _bad_parameter(where, name, t)
     base, meta = t.__origin__, t.__metadata__
@@ -554,8 +554,8 @@ def _stated_parameter(where: str, name: str, t: Any) -> ValueType:
     return _sized(kind, _length(where, kind, meta, "parameter"), measured=False)
 
 
+# A list result of fixed length, ``pulse.Length[kind, n]``.
 def _stated_result(where: str, t: Any) -> ValueType:
-    """A list result of fixed length, ``pulse.Length[kind, n]``."""
     if typing.get_origin(t) is not typing.Annotated:
         _bad_result(where, t)
     base, meta = t.__origin__, t.__metadata__
@@ -572,8 +572,8 @@ def _stated_result(where: str, t: Any) -> ValueType:
     return _sized(kind, _length(where, kind, meta, "result"), measured=False)
 
 
+# The one positive whole number a ``pulse.Length`` states.
 def _length(where: str, kind: int, meta: tuple[Any, ...], what: str) -> int:
-    """The one positive whole number a ``pulse.Length`` states."""
     spelled = _spell_length(kind, meta)
     if len(meta) != 1:
         raise InvalidTypeError(
@@ -601,16 +601,16 @@ _SPELLED = {
 }
 
 
+# A list type's ``pulse.Length[...]`` spelling and what it counts
+# (``"bit"``, ``"number"``...), for errors.
 def _spelled(spec: ValueType) -> tuple[str, str]:
-    """A list type's ``pulse.Length[...]`` spelling and what it counts
-    (``"bit"``, ``"number"``...), for errors."""
     head = spec.descriptor.split(":")[0].split("[")[0]
     name, unit = _SPELLED.get(head, (spec.descriptor, "value"))
     return f"pulse.Length[{name}, {spec.count}]", unit
 
 
+# A handler's or body's answer of the wrong length, at run time.
 def _wrong_length(function: ClassicalFunction[..., Any], position: int, got: int) -> str:
-    """A handler's or body's answer of the wrong length, at run time."""
     spec = function.results[position]
     spelled, unit = _spelled(spec)
     which = f" as result {position}" if len(function.results) > 1 else ""
@@ -707,6 +707,25 @@ class _LazyTypes:
 _NO_VERSIONS: Mapping[Any, Any] = types.MappingProxyType({})
 
 
+# Refuse *name* for a function of the user's when it is the name
+# cudaq-pulse gives a version of a CUDA-Q QEC decoder message
+# (``get_corrections__3_1``): a program's functions, and the simulation's
+# replay of a decoder's calls, are found by name.
+def _not_a_message(name: str, what: str, fix: str = "give it another name") -> None:
+    from . import _cudaqx
+
+    found = _cudaqx._message_version(name)
+    if found is None:
+        return
+    message, numbers = found
+    raise InvalidValueError(
+        f"{what}: that is the name cudaq-pulse gives the CUDA-Q QEC decoder message "
+        f"{message.name} for decoder {numbers[0]}"
+        + (f" and length {numbers[1]}" if len(numbers) > 1 else "")
+        + f", and a call of it would be taken for that message; {fix}"
+    )
+
+
 class ClassicalFunction[**P, R]:
     """A classical function a pulse kernel can call while the QPU runs.
 
@@ -758,6 +777,9 @@ class ClassicalFunction[**P, R]:
             raise InvalidValueError(
                 f"a classical function name must be an identifier, got {name!r}"
             )
+        # The functions cudaq-pulse declares itself give their dispatch key.
+        if _dispatch_key is None and "__" in name:
+            _not_a_message(name, f"a classical function can't be named {name!r}")
         self.name = name
         self.implementation = implementation
         self.args: tuple[ValueType, ...] = _LazyTypes(self, "args")  # type: ignore[assignment]
@@ -851,6 +873,8 @@ class ClassicalFunction[**P, R]:
         # A template's list-result lengths per version (classical._infer).
         self._length_rules: Any = None
 
+    # A function of one schema given as wire types, for the functions
+    # cudaq-pulse declares itself.
     @classmethod
     def _declared(
         cls,
@@ -859,15 +883,13 @@ class ClassicalFunction[**P, R]:
         results: Sequence[ValueType],
         **options: Any,
     ) -> ClassicalFunction[..., Any]:
-        """A function of one schema given as wire types, for the functions
-        cudaq-pulse declares itself."""
         function: ClassicalFunction[..., Any] = cls(implementation, **options)
         function.args = tuple(args)
         function.results = tuple(results)
         return function
 
     @property
-    def __name__(self) -> str:  # noqa: PLW3201
+    def __name__(self) -> str:
         return self.name
 
     def __call__(self, *args: P.args, **kwargs: P.kwargs) -> R:
@@ -930,7 +952,10 @@ class ClassicalFunction[**P, R]:
                     f"{self.name}.specialize(): {name} must be a positive length"
                 )
             key.append(n)
-        version = _version(self, key[0] if self._n == 1 else tuple(key))
+        made = key[0] if self._n == 1 else tuple(key)
+        # No kernel is compiling here: a name is refused as a value.
+        _version_name(self, made)
+        version = _version(self, made)
         return typing.cast("ClassicalFunction[P, R]", version)
 
     # A declaration, like a function: a copy is the function itself.
@@ -967,9 +992,9 @@ class ClassicalFunction[**P, R]:
         return f"<classical function {self.name}({args}) -> ({results}) on link {self.link!r}>"
 
 
+# Read a declaration's hints, once. Never touch ``__dict__``: that
+# changes the attribute layout every read goes through.
 def _resolve(function: ClassicalFunction[..., Any]) -> None:
-    """Read a declaration's hints, once. Never touch ``__dict__``: that
-    changes the attribute layout every read goes through."""
     if function.args.__class__ is not _LazyTypes:  # type: ignore[comparison-overlap]
         return
     if function._error is not None:
@@ -1003,13 +1028,13 @@ def _resolve(function: ClassicalFunction[..., Any]) -> None:
     function._fast = function._made
 
 
+# A version's results: rules made sized with its input lengths.
 def _result_specs(
     function: ClassicalFunction[..., Any],
     shape: _Shape,
     lengths: dict[str, int],
     text: str,
 ) -> tuple[ValueType, ...]:
-    """A version's results: rules made sized with its input lengths."""
     rules = [(i, r) for i, r in enumerate(shape.results) if r.__class__ is _Rule]
     if not rules:
         return shape.results
@@ -1052,10 +1077,10 @@ def _result_specs(
     return tuple(out)
 
 
+# How to give a list result a length the compiler can see.
 def _length_advice(
     function: ClassicalFunction[..., Any], shape: _Shape, inferred: list[tuple[int, str]]
 ) -> str:
-    """How to give a list result a length the compiler can see."""
     kind = _LIST_NAME[shape.results[inferred[0][0]].kind]
     fixed = f"give it a fixed size: -> pulse.Length[{kind}, 8]"
     if function.implementation is None:
@@ -1121,10 +1146,25 @@ def _lengths_text(template: ClassicalFunction[..., Any], key: Any) -> str:
     )
 
 
+# The name of the version of *template* for *key*: the template's and its
+# lengths (``decode__4``, ``i`` before the length of a ``list[int]`` of
+# numbers), which must not be a decoder message version's.
+def _version_name(template: ClassicalFunction[..., Any], key: Any) -> str:
+    suffix = "_".join(str(n) if n >= 0 else f"i{-n}" for n in _key_items(key))
+    name = f"{template.name}__{suffix}"
+    _not_a_message(
+        name,
+        f"the version of {template.name} for {_lengths_text(template, key)} "
+        f"would be named {name!r}",
+        f"rename {template.name}",
+    )
+    return name
+
+
+# The version of *template* for *key*: per unsized parameter its
+# length, negative for a ``list[int]`` of numbers (i32) rather than
+# measurements (levels).
 def _make(template: ClassicalFunction[..., Any], key: Any) -> ClassicalFunction[..., Any]:
-    """The version of *template* for *key*: per unsized parameter its
-    length, negative for a ``list[int]`` of numbers (i32) rather than
-    measurements (levels)."""
     from ..kernel.ir_builder import CompilationError
 
     shape = template._shape
@@ -1150,8 +1190,10 @@ def _make(template: ClassicalFunction[..., Any], key: Any) -> ClassicalFunction[
             version.results = _result_specs(template, shape, lengths, text)
         except TypeError as error:
             raise CompilationError(str(error), code="wrong_argument") from None
-    suffix = "_".join(str(n) if n >= 0 else f"i{-n}" for n in _key_items(key))
-    version.name = f"{template.name}__{suffix}"
+    try:
+        version.name = _version_name(template, key)
+    except InvalidValueError as error:
+        raise CompilationError(str(error), code="wrong_argument") from None
     version._dispatch_key = dispatch_key(version.name)
     version._template = template
     version._key = key
@@ -1168,17 +1210,17 @@ def _version(template: ClassicalFunction[..., Any], key: Any) -> ClassicalFuncti
     return version
 
 
+# The version of *template* for *key*, as an unpickled program names it.
 def _unpickled_version(
     template: ClassicalFunction[..., Any], key: Any
 ) -> ClassicalFunction[..., Any]:
-    """The version of *template* for *key*, as an unpickled program names it."""
     _resolve(template)
     return _version(template, key)
 
 
+# A submit whose version isn't made yet: ``builder._versions[template]``
+# maps each key to its version, in first use order.
 def _enter_slow(builder: Any, template: ClassicalFunction[..., Any], key: Any) -> Any:
-    """A submit whose version isn't made yet: ``builder._versions[template]``
-    maps each key to its version, in first use order."""
     versions = builder._versions
     if versions is None:
         versions = builder._versions = {}
@@ -1194,13 +1236,13 @@ def _enter_slow(builder: Any, template: ClassicalFunction[..., Any], key: Any) -
     return version
 
 
+# What answers each function of a program, by name: a handler given
+# for its name, else one given for its template's name (serving every
+# version), else its body.
 def _handlers_for(
     functions: Sequence[ClassicalFunction[..., Any]],
     handlers: Mapping[str, Callable[..., Any]] | None,
 ) -> dict[str, Callable[..., Any]]:
-    """What answers each function of a program, by name: a handler given
-    for its name, else one given for its template's name (serving every
-    version), else its body."""
     chosen: dict[str, Callable[..., Any]] = {
         f.name: f.implementation for f in functions if f.implementation is not None
     }

@@ -32,6 +32,27 @@ body. The instructions few bodies use and the wording of an error are in
 ``_infer_rare``, imported when first needed.
 """
 
+# Contents, in file order. Mostly bottom-up; the entry point section is last.
+#
+#   Errors and reasons               InferenceError; why a length isn't a number
+#   Numbers: ints, or k + sum(c * s) over symbols with bounds
+#   Numbers the input lengths make   _Trace, _Num: ints that record how they are used
+#   Abstract values                  Seq, Const, Tup, Opq, Obj, Attr, It, Fn, Map, Slc
+#   Builtins the analysis knows      tables of builtins and operators
+#   Canonical opcodes                opcode sets and limits
+#   States                           _State: the stack and names of one path
+#   The analysis                     _Run, one run of a body:
+#     Symbols and bounds               lengths that values decide
+#     Values                           lengths and truth of abstract values
+#     Running the instructions         sweep: the loop over instructions
+#     Control flow                     where paths meet
+#     Loops                            for and while
+#     Instructions                     what sweep's arms call
+#     Calls                            helpers, builtins, methods, generators
+#   The part loaded when first needed  _rare: error wording, rare instructions
+#   Reads from outside the function  globals, attributes, closure cells
+#   Entry point                      LengthRules, infer_lengths
+
 from __future__ import annotations
 
 import builtins
@@ -46,6 +67,8 @@ from ..kernel import _bytecode_normalize as _bc
 from . import Bits
 
 __all__ = ["InferenceError", "LengthRules", "infer_lengths"]
+
+# ── Errors and reasons ──────────────────────────────────────────────────────
 
 
 class InferenceError(TypeError):
@@ -552,9 +575,8 @@ def _cp(v: Any, memo: dict[int, Any]) -> Any:
     return v
 
 
-def _fork(st: _State, memo: dict[int, Any] | None = None) -> _State:
-    if memo is None:
-        memo = {}
+def _fork(st: _State) -> _State:
+    memo: dict[int, Any] = {}
     return _State(
         [_cp(v, memo) for v in st.stack], {k: _cp(v, memo) for k, v in st.env.items()}, st.path
     )
@@ -660,7 +682,7 @@ class _Run:
         self.placeholders: set[int] = set()
         self.active: list[Any] = [code]  # the bodies running, outermost first
 
-    # symbols and bounds
+    # ── Symbols and bounds ──────────────────────────────────────────────────
 
     def sym(self, lo: Any, hi: Any) -> int:
         s = len(self.lo) + 1
@@ -707,7 +729,7 @@ class _Run:
             return False
         return None
 
-    # values
+    # ── Values ──────────────────────────────────────────────────────────────
 
     def from_object(self, obj: Any, name: str, line: int) -> Any:
         c = obj.__class__
@@ -806,7 +828,7 @@ class _Run:
         box.src = None
         return box.n is not None
 
-    # running the instructions
+    # ── Running the instructions ────────────────────────────────────────────
 
     def sweep(
         self, dec: Any, st: _State | None, lo: int, hi: int, head: int, comp: Any, rets: list[Any]
@@ -921,6 +943,26 @@ class _Run:
             stack = st.stack
             env = st.env
 
+            # The arms, by subject (search for the name):
+            #   names         LOAD_FAST STORE_FAST STORE_FAST_MAYBE DELETE_FAST
+            #                 LOAD_FAST_AND_CLEAR LOAD_DEREF STORE_DEREF
+            #                 LOAD_GLOBAL LOAD_CONST LOAD_ATTR
+            #   stack         POP_TOP COPY SWAP
+            #   operators     BINARY UNARY NOT COMPARE IS CONTAINS
+            #   calls         CALL CALL_KW CALL_EX RETURN GEN_YIELD
+            #                 MAKE_GENEXPR SET_FUNCATTR
+            #   jumps         JUMP JUMP_IF_FALSE JUMP_IF_TRUE JUMP_IF_NONE
+            #                 JUMP_IF_NOT_NONE RAISE
+            #   loops         GET_ITER FOR_ITER
+            #   sequences     BUILD_LIST BUILD_TUPLE BUILD_SLICE LIST_APPEND
+            #                 LIST_EXTEND UNPACK_SEQUENCE UNPACK_EX SUBSCR
+            #                 STORE_SUBSCR DELETE_SUBSCR
+            #   dicts, sets   BUILD_MAP BUILD_CONST_KEY_MAP MAP_ADD DICT_MERGE
+            #                 BUILD_SET SET_ADD SET_UPDATE
+            #   strings       BUILD_STRING CONVERT FORMAT
+            #   imports       IMPORT_NAME IMPORT_FROM
+            #   other         NOTE_INPLACE UNSUPPORTED (a ``while``, a ``try``,
+            #                 or an instruction ``_infer_rare`` runs)
             if op == _bc.LOAD_FAST:
                 v = env.get(arg)
                 if v is None:
@@ -1202,14 +1244,14 @@ class _Run:
                     st = None
                     continue
                 if note[0] != "try":
-                    st = _rare().raw(self, st, note[0], note[1], dec, i, throw)
+                    st = _rare().raw(self, st, note[0], note[1], dec, i)
                     if st is None:
                         continue
             else:
                 raise _GiveUpError
             i += 1
 
-    # control flow
+    # ── Control flow ────────────────────────────────────────────────────────
 
     def handlers(self, dec: Any) -> list[Any]:
         hand: list[Any] = [None] * len(dec.instrs)
@@ -1375,7 +1417,7 @@ class _Run:
             return SCALAR
         return Seq(None, self.fork_reason("length", name, "of different kinds", fork, dec, comp))
 
-    # loops
+    # ── Loops ───────────────────────────────────────────────────────────────
 
     def comp_of(self, dec: Any, h: int, comp: Any) -> Any:
         """The comprehension a loop builds: ``("comp", decoded, index)``."""
@@ -1724,7 +1766,7 @@ class _Run:
         for k in list(st.env):
             st.env[k] = fix(st.env[k])
 
-    # instructions
+    # ── Instructions ────────────────────────────────────────────────────────
 
     def const(self, value: Any, dec: Any, i: int) -> Any:
         c = value.__class__
@@ -2010,7 +2052,7 @@ class _Run:
             v, _why(line, "it is used by a nested function at line {}, which could change it", line)
         )
 
-    # calls
+    # ── Calls ───────────────────────────────────────────────────────────────
 
     def call(self, st: _State, f: Any, args: list[Any], names: int, dec: Any, i: int) -> Any:
         c = f.__class__
@@ -2327,6 +2369,8 @@ class _Run:
 
 
 _MISSING: Any = object()
+
+# ── The part loaded when first needed ───────────────────────────────────────
 
 
 def _rare() -> Any:

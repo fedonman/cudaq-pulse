@@ -448,14 +448,6 @@ def shaped_on_both(a, b):
     drive(db, envelope)
 
 
-def _samples(lowered):
-    return [
-        node.split("samples = ")[1]
-        for node in lowered.mlir().splitlines()
-        if "custom_samples" in node and "samples = " in node
-    ]
-
-
 def test_custom_samples_the_envelope_at_the_rate_of_the_line_that_plays_it():
     qpu = _mixed()
     lowered = pulse.compile(shaped_on_both, quantum_system=qpu).lower(qpu.qudits[0], qpu.qudits[2])

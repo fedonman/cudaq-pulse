@@ -57,7 +57,6 @@
 #define GET_OP_CLASSES
 #include "cudaq-pulse/Dialect/Pulse/PulseOps.h.inc"
 
-#include <functional>
 #include <string>
 #include <vector>
 
@@ -179,14 +178,31 @@ private:
   /// The ops `value` reaches through arithmetic, as the uses that take it.
   void takers(mlir::Value value, llvm::SmallVectorImpl<mlir::OpOperand *> &out,
               llvm::DenseSet<mlir::Value> &seen) {
-    if (!seen.insert(value).second)
-      return;
-    for (mlir::OpOperand &use : value.getUses()) {
+    // The values being followed, the innermost last, each with the use it
+    // is at: a value's uses in their order, and what an arithmetic use
+    // computes followed to its end before the next use.
+    struct Following {
+      mlir::Value::use_iterator at, end;
+    };
+    llvm::SmallVector<Following, 16> following;
+    auto follow = [&](mlir::Value next) {
+      if (seen.insert(next).second)
+        following.push_back({next.use_begin(), next.use_end()});
+    };
+    follow(value);
+    while (!following.empty()) {
+      Following &last = following.back();
+      if (last.at == last.end) {
+        following.pop_back();
+        continue;
+      }
+      mlir::OpOperand &use = *last.at++;
       mlir::Operation *owner = use.getOwner();
       if (isArithmetic(owner) && !(mlir::isa<mlir::arith::SelectOp>(owner) &&
                                    use.getOperandNumber() == 0)) {
-        for (mlir::Value result : owner->getResults())
-          takers(result, out, seen);
+        // The first result is followed first: it is pushed last.
+        for (mlir::Value result : llvm::reverse(owner->getResults()))
+          follow(result);
         continue;
       }
       out.push_back(&use);
@@ -367,13 +383,27 @@ private:
           work.push_back(user);
     }
     // Of those, the ones the anchor reads, operands first.
-    std::function<void(mlir::Value)> visit = [&](mlir::Value value) {
-      mlir::Operation *def = value.getDefiningOp();
-      if (!def || !reached.contains(def) || between.contains(def))
-        return;
-      for (mlir::Value operand : def->getOperands())
-        visit(operand);
-      between.insert(def);
+    // The ops being placed, the innermost last, each with the operand it
+    // is at: an op goes in once those its operands need are in.
+    llvm::SmallVector<std::pair<mlir::Operation *, unsigned>, 16> placing;
+    auto visit = [&](mlir::Value value) {
+      auto open = [&](mlir::Value read) {
+        mlir::Operation *def = read.getDefiningOp();
+        if (def && reached.contains(def) && !between.contains(def))
+          placing.emplace_back(def, 0);
+      };
+      open(value);
+      while (!placing.empty()) {
+        auto &[def, at] = placing.back();
+        if (between.contains(def)) {
+          placing.pop_back();
+        } else if (at < def->getNumOperands()) {
+          open(def->getOperand(at++));
+        } else {
+          between.insert(def);
+          placing.pop_back();
+        }
+      }
     };
     anchor->walk([&](mlir::Operation *op) {
       for (mlir::Value operand : op->getOperands())
@@ -384,23 +414,33 @@ private:
   /// Erase the ops copied into arms, the selects they read and their
   /// conditions, once nothing uses them.
   void eraseDead() {
-    bool erased = true;
-    while (erased) {
-      erased = false;
-      for (mlir::Operation *op : llvm::to_vector(dead)) {
-        if (!op->use_empty())
-          continue;
-        dead.remove(op);
-        for (mlir::Value operand : op->getOperands())
-          if (mlir::Operation *def = operand.getDefiningOp())
-            if (computesOnly(def) &&
-                !mlir::isa<pulse::QuditAllocOp, pulse::GetDriveLineOp,
-                           pulse::GetReadoutLineOp>(def))
-              dead.insert(def);
-        op->erase();
-        erased = true;
-      }
+    // The ops still to look at, and those erased: an op is looked at again
+    // when one that used it goes, so each is looked at once per use.
+    llvm::SmallVector<mlir::Operation *, 16> todo(dead.begin(), dead.end());
+    llvm::DenseSet<mlir::Operation *> erased;
+    while (!todo.empty()) {
+      mlir::Operation *op = todo.pop_back_val();
+      if (erased.contains(op) || !op->use_empty())
+        continue;
+      for (mlir::Value operand : op->getOperands())
+        if (mlir::Operation *def = operand.getDefiningOp())
+          if (computesOnly(def) &&
+              !mlir::isa<pulse::QuditAllocOp, pulse::GetDriveLineOp,
+                         pulse::GetReadoutLineOp>(def)) {
+            dead.insert(def);
+            todo.push_back(def);
+          } else if (dead.contains(def)) {
+            // A condition's op, dead whatever it is: looked at again too.
+            todo.push_back(def);
+          }
+      // An op with regions (a condition's own branch) takes the uses of
+      // the ops in them with it: every dead op is looked at again.
+      if (op->getNumRegions())
+        todo.append(dead.begin(), dead.end());
+      erased.insert(op);
+      op->erase();
     }
+    dead.remove_if([&](mlir::Operation *op) { return erased.contains(op); });
   }
 
   mlir::func::FuncOp function;

@@ -35,6 +35,13 @@ and unpacks it. It refuses archives it cannot verify. Configuring runs it
 for you if you skip this step; on a platform without a pinned archive, pass
 `-DMLIR_DIR=<prefix>/lib/cmake/mlir` for your own MLIR 22.1.8 build.
 
+When the pinned MLIR changes, re-read `undeclaredMakes()` in
+`core/mlir/bindings/bindings.cpp`: it lists the ops each canonicalization
+pattern that declares none can make, read from MLIR's sources, and binding
+values folds a module with only the patterns those ops reach.
+`tests/test_canonical_patterns.py` names any pattern missing from it and any
+entry that no longer matches a pattern.
+
 ## Build and test
 
 ```bash
@@ -133,6 +140,76 @@ times as many. A failure prints a `@reproduce_failure` line; a nightly
 failure also gives its seed in the job summary, replayed with
 `HYPOTHESIS_PROFILE=nightly pytest <test> --hypothesis-seed=<seed>`.
 
+### Test levels
+
+Every test in `tests/` has one level, 0 to 3. The level says how much a
+failure matters and how soon the test has to run. CI still runs every level
+on every change for now; the levels are in place so that it can later run
+the lower ones on every change and all of them less often.
+
+The levels are for the pytest suite only. The lit suite in `test/`, the C++
+runtime host tests and the perf gate have no level and are not selected by
+`--level`: a job that runs `pytest --level 0` keeps running them beside it.
+Level 3 is not the `nightly` marker: that marker, with `--run-nightly`,
+skips two slow checks at any level, and stays as it is.
+
+| Level | Name | A test belongs here when |
+|---|---|---|
+| 0 | Contract | A failure means a user gets a wrong result (a wrong schedule, IR, export or simulated state), or a written promise is broken: the public names, a shipped example runs, every Python version traces a kernel to the same IR. |
+| 1 | Behaviour | It checks one feature, one option or one error: that the error is raised, with its class, its code, its kernel line and a fragment of its message. This is the level of a test that says nothing. |
+| 2 | Exhaustive | It sweeps a cross-product or a corpus (more than about 50 cases from one function), is a property test, checks a linear-time or bounded-memory claim on a large program, or takes 5 to 20 s per case. |
+| 3 | Fine detail | It checks the exact text of a message or a repr, an internal table or a pin, that the docs agree with the code, or the built site. Also any case of more than 20 s. |
+
+To choose the level of a new test, ask in this order:
+
+1. Would a failure mean a wrong result for a user, or a broken written
+   promise, and does each case take under a second, without a child process?
+   Level 0. Say so in the pull request: level 0 is kept small, and
+   `tests/test_levels.py` fails when it holds more than 600 cases.
+2. Does it check exact wording, a repr, an internal table, a pin or the
+   docs, or take more than 20 s? Level 3.
+3. Is it a sweep of more than about 50 generated cases, a property test, a
+   scaling or memory claim on a large program, or 5 to 20 s per case?
+   Level 2.
+4. Otherwise level 1, and there is nothing to write.
+
+A level is written in one of two places. A marker in the test file:
+`pytestmark = pytest.mark.level2` for the file,
+`@pytest.mark.level3` on a test or a class, or
+`pytest.param(..., marks=pytest.mark.level3)` on one parameter. Or a line in
+`tests/levels.toml`, which holds the first classification of the suite so
+that it could be made without editing every test file:
+
+```toml
+[level2.tests]
+"tests/test_frames.py::test_a_run_of_branches_places_its_frame_changes_in_linear_time" = "a linear-time claim on a large program"
+```
+
+A key there is a file, a `file::test` or a `file::test[parameter id]`, with
+`*` for any characters, and the value is the reason in one line. A `*`
+itself cannot be asked for. The closest one counts: a marker on the
+parameter, on the test, on its class (a subclass's own marker before its
+base's), then the file's `pytestmark`, then the table (parameter, test,
+file; of two as close, the entry written without `*`), then level 1.
+Use a marker for a new test. A file that gets markers loses its lines in the
+table: a test with both fails `tests/test_levels.py`, as does a line that
+names no test. Those checks are at level 0 themselves. Two different levels
+in one place (two markers on one test, two lines for one file) stop pytest
+with an error that names the test.
+
+```bash
+pytest tests --level 0 -m "not gpu"        # level 0 only
+pytest tests --level 1 -m "not gpu"        # levels 0 and 1
+pytest tests/test_frames.py --level 2      # one file, without its level 3 cases
+pytest tests --level-report -m "not gpu"   # cases per level and per file; runs nothing
+```
+
+`--level N` runs level N and every level below it, and holds together with
+`-m` and `-k`: `-m gpu --level 1` runs the GPU tests of levels 0 and 1.
+Without `--level` every level runs. Select with `--level`, not with
+`-m level2`: `-m` sees only markers, not the table, and matches a marker on
+a file even for a test in it that is marked otherwise.
+
 ## Writing passes
 
 Compiler passes are C++ MLIR passes in `core/mlir/transforms/`. To try one
@@ -226,8 +303,9 @@ on two measures:
   on Linux x86-64. A case fails at more than 0.4% above its baseline. It
   also fails at more than 1% below, so that a speedup is recorded in the
   baseline instead of hiding a later regression. A failure says whether it
-  is a regression, a gain or layout only (below). Layout only that the
-  change itself caused passes (below).
+  is a regression, a gain or layout only (below). A failing row that is
+  layout only against its base is judged against the base instead, at its own
+  tolerance (below).
 - **Program sizes**: op count, packed program bytes and export bytes. Any
   change fails. These are the same on every platform, and
   `tests/test_perf_gate.py` checks them in the regular test suite too.
@@ -301,45 +379,87 @@ instructions says its kind, and the summary counts them by kind:
 
 - **regression**: above the limit;
 - **gain**: more than 1% below; take a new baseline to keep it;
-- **layout only**: the same Python work as the baseline's (the summary's
-  "Python work" column says `same`), or as the base's where the row was
-  compared with its base (below), and a change of at most 2% either way.
+- **layout only**: against its base built in the job, the same Python work
+  and the same calls of every function outside the layout classes (below);
+  without a base, the same Python work as the baseline's (the summary's
+  "Python work" column says `same`) and a change of at most 2% either way.
   The instructions moved below Python, most likely in the layout of the
   interpreter's caches and memory: for example, one new class at import
   renumbers the interpreter's type version tags and changes its method
-  cache's collisions. Judge it (compare the Callgrind dumps with the
-  baseline run's) before taking a new baseline.
+  cache's collisions.
 
 A regression or a gain lists each counter of Python work that changed, or,
 with the same work, says the change is in native code. Every kind fails. A
 baseline without Python work tells only regressions from gains.
 
 **Base comparison.** A count also moves with the code merged before a
-change, so the job compares a failure of at most 2% either way with the
-change's base (a pull request's base, or the previous tip of a push to
-main). If the change
-keeps the base's measured code, it touches only the package's Python
-sources and files the job never reads (tests, docs, examples, other
-workflows than `ci.yml`, the baselines; `pyproject.toml` and `uv.lock` only
-outside what the job builds), the gate checks out the base's
-`core/frontend` over the tree's and measures it on the same build. A row
-whose case ran the same Python work there, and whose count the change moved
-by at most 0.95% either way from the base's, passes as `layout`, with a
-notice. For a slower row the base's Python work is the one compared, not
-the baseline's: code merged after the baseline was taken can change a
-case's work. A gain needs the baseline's work as well, so that it is kept. Native code, build files, `ci.yml`, the gate and its cases are
-measured code. A change to native code or its build is compared with its
-base built in the same job, with the extension's symbols kept: a slower row
-whose case ran the same Python work there, moved by at most 0.95% from the
-base's, and called every named native function as many times as the base,
-except kinds whose calls follow addresses rather than the program
-(container probes, the interpreter, allocation, memory copies, unmapped
-code), passes as `layout`, and its notice lists every function whose calls
-differed. A change to `ci.yml`, the gate, its cases or the pins, or one git
-cannot compare, is judged by the limits. A gain that passes this way isn't
-kept, and hidden native work behind the same calls passes below 0.95% per
-change (up to 2% from the baseline). `python tools/perf-gate.py --help`
-(base comparison, native base comparison) has the details.
+change, and with where the change's build puts code and data, so the job
+judges a row that fails on instructions against the change's base (a row
+within the baseline's limits is not measured against it): a pull
+request's base, a branch's merge base with main for a run dispatched on
+it, or the previous tip of a push. If the change keeps the base's measured
+code (it touches only the package's Python sources and files the job never
+reads: tests, docs, examples, other workflows than `ci.yml`, the baselines;
+`pyproject.toml` and `uv.lock` only outside what the job builds), the gate
+checks out the base's `core/frontend` over the tree's and measures it on
+the same build. A change to native code or its build is compared with its
+base built in the same job, with the extension's symbols kept. A row is
+layout only when its case ran the same Python work on the base and called
+every named function as many times, except kinds whose calls follow the
+heap's shape rather than the code: libc's allocator and its internal steps
+(`_int_malloc`, `malloc_consolidate` and the like), C++'s `new` and
+`delete` and LLVM's buffers, libc's memory copies and compares, the probes
+of hash tables and ordered containers, the interpreter's own functions,
+and unattributed code. A layout-only row passes as `layout` when its count
+is at most 0.4% above the base's, and any lower count passes; a gain that
+passes this way isn't kept, and hidden native work behind the same calls
+passes below 0.4% above the base. Its notice counts the calls that
+differed by kind. A row with other differences is judged against the
+stored baseline, and its failure says why (other Python work, or the calls
+of its own code that differed). A change to `ci.yml`, the gate, its cases
+or the pins, a base that does not build, or one git cannot compare is
+judged against the stored baseline, which still guards `main` itself.
+`python tools/perf-gate.py --help` (base comparison, native base
+comparison) has the details.
+
+When a perf-gate row fails as "layout only", its Python work and its calls
+are the base's, and only how much each call cost moved. Read the reason:
+libc's allocator, string or copy routines, hash-table probes, or the
+interpreter's caches follow where data sits in memory, and an unrelated
+change can move them, by up to about 1%. Such a row is judged against its
+base, at its own tolerance (0.4% unless the case declares one). A row still
+over 0.4% above its base is the owner's to accept or not: its failure line
+says what to bring, the layout classes that carried the shift and the
+functions whose cost per call moved most (from the tree's and the base's
+dumps, kept in the `perf-gate-callgrind-dumps` artifact). Trace it to its
+cause before asking. Never re-baseline by hand to pass it (the baseline
+comes only from a CI run's artifact).
+
+**Address-keyed functions.** A few MLIR functions look a key up in a hash
+table, and how many instructions a call takes follows where the key lands,
+so a change that moves the build's layout moves their cost per call while
+they do the same work (`ADDRESS_KEYED` in `tools/perf-gate.py`: MLIR's
+parametric storage lookup, an attribute storage's initialization and an
+operation's registration, each keyed on a `TypeID`). The baseline records
+each listed function's entries and instructions per repetition for each
+case, from the run it was taken from. A row that fails as a regression is
+also judged against those records: a listed function entered as often, or
+at most 1% of its recorded entries (and at least one) more or fewer times,
+has its change in cost per call taken out over the row's entries, and the
+entries gained or lost stay in the rest at the baseline's cost per call, so
+more work still counts. The row passes as `address-keyed` when that rest is
+at most its tolerance above the stored baseline and what was taken out is
+at most 2% of the baseline's count. The rest is compared like for like with
+the baseline's, so an address-keyed change merged into main doesn't stay in
+later rows, and nothing outside the listed functions can add up across
+merges. Its notice gives each listed function's entries and cost per call
+in the baseline and in the row, what was taken out and what was left in. A
+baseline taken before these records existed is judged the same way against
+the change's base built in the job. Only MLIR or LLVM functions can be
+listed. A new entry is its own pull request, changing only the list and its
+test, with what the function keys on and the CI runs that showed it entered
+as often on both sides with its cost per call moved, and the owner approves
+it.
 
 Wall-clock times are informational only: shared runners are too noisy to
 block on. The test job still reports `tests/test_perf_guard.py`'s

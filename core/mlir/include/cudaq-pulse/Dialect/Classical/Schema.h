@@ -3,7 +3,7 @@
 
 // The argument and result descriptors of `classical.callable` ("bits:4",
 // "f64", "i32[8]", ...): how many SSA values each one takes or gives, and
-// its size and type on the wire.
+// its size on the wire.
 
 #pragma once
 
@@ -68,42 +68,6 @@ struct Descriptor {
       return 8 * count;
     }
     return 0;
-  }
-
-  uint8_t wireType() const {
-    using namespace cudaq_pulse::wire;
-    switch (kind) {
-    case Kind::U8:
-      return kUInt8;
-    case Kind::I32:
-      return kInt32;
-    case Kind::I64:
-      return kInt64;
-    case Kind::F32:
-      return kFloat32;
-    case Kind::F64:
-      return kFloat64;
-    case Kind::Bits:
-      return kBitPacked;
-    case Kind::Levels:
-    case Kind::ArrayU8:
-      return kArrayUInt8;
-    case Kind::ArrayI32:
-      return kArrayInt32;
-    case Kind::IQ:
-    case Kind::ArrayF32:
-      return kArrayFloat32;
-    case Kind::ArrayF64:
-      return kArrayFloat64;
-    }
-    return 0;
-  }
-
-  /// `num_elements` of the wire type descriptor.
-  uint32_t wireElements() const {
-    if (kind == Kind::IQ)
-      return static_cast<uint32_t>(2 * count);
-    return static_cast<uint32_t>(count);
   }
 };
 

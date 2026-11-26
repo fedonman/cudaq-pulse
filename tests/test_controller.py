@@ -223,7 +223,11 @@ def test_each_line_gives_the_frequency_of_its_own_tone():
     lowered = pulse.compile(other_tones, quantum_system=qs).lower(qs.qudits[0])
     flat = lowered.export_to_controller()
     native = {line["role"]: line["native_frequency_hz"] for line in flat["lines"]}
-    assert native == {"drive": physical.frequency_hz, "readout": physical.readout.frequency_hz}
+    # The drive line's tone is at the qudit's dressed frequency (its couplings).
+    assert native == {
+        "drive": qs.qudits[0].dressed_frequency_hz,
+        "readout": physical.readout.frequency_hz,
+    }
     # No drive plays the line's own tone at its own frequency; the line gives it.
     played = [e["frequency_hz"] for e in flat["events"] if e["kind"] == "drive"]
     assert native["drive"] not in played

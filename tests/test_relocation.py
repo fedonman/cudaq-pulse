@@ -140,7 +140,7 @@ def test_a_readout_depends_on_the_slot_s_readout_frequency():
     for version in (1, 2):
         export = probe.lower(H[9], 0.2).export_to_controller(version=version)
         values = {s["symbol"]: s.get("value") for s in export["symbols"]}
-        assert values["s0.f01"] == qudit.frequency_hz
+        assert values["s0.f01"] == DEV.qudits[9].dressed_frequency_hz
         assert values["s0.f_ro"] == qudit.readout.frequency_hz
         played = [e["symbols"]["frequency_hz"] for e in export["events"] if "symbols" in e]
         # The drive, the readout, and the drive on the readout line's tone.

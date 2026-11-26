@@ -311,7 +311,7 @@ for each kind of event. Each must be either emitted or refused cleanly:
    :class: output
 
    ok: True
-   backend 'text': 10 passed, 8 refused
+   backend 'text': 12 passed, 8 refused
 
 What the text backend does with the corpus:
 
@@ -320,7 +320,7 @@ What the text backend does with the corpus:
   only at run time.
 
 .. themed-figure:: figures/validation_corpus.svg
-   :alt: The 18 programs of the validation corpus and what the text backend does with each: play, passed; readout, passed; wait, passed; sync, passed; loop, passed; call, refused; answer, refused; frame_update, refused; branch, refused; answer_timeout, refused; timeout_function, refused; runtime, refused; runtime_frequency, refused; shared_line, passed; several_controllers[0], passed; several_controllers[1], passed; unsupported_event, passed; newer_format, passed. 10 pass and 8 are refused cleanly; none fail.
+   :alt: The 20 programs of the validation corpus and what the text backend does with each: play, passed; readout, passed; wait, passed; sync, passed; loop, passed; call, refused; answer, refused; frame_update, refused; branch, refused; answer_timeout, refused; timeout_function, refused; runtime, refused; runtime_frequency, refused; shared_line, passed; shared_drive_line_two_tones, passed; shared_drive_line_one_tone, passed; several_controllers[0], passed; several_controllers[1], passed; unsupported_event, passed; newer_format, passed. 12 pass and 8 are refused cleanly; none fail.
    :width: 100%
 
    Each program of the corpus, and what the text backend did with it.

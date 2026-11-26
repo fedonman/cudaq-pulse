@@ -17,8 +17,6 @@ from typing import Any
 from cudaq_pulse import Controller, ControlSystem
 from cudaq_pulse.controller import FORMAT
 
-LOADED = True
-
 
 class DummyBackend:
     name = "dummy"

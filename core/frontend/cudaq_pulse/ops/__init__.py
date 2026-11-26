@@ -147,15 +147,23 @@ def _require_context(op_name: str) -> NoReturn:
 # ── Channel access ───────────────────────────────────────────────────────
 
 
-def get_drive_line(qudit: Any) -> Line:
+def get_drive_line(qudit: Any, *others: Any) -> Line:
     """The drive line of a qudit.
 
     A qudit has one drive line for the whole program: later calls, also
     from called kernels, return it as it now is, so pulses on it play in
     sequence. Its tone is ``line.tone``.
 
+    On a control system that declares a broadcast drive line,
+    ``DriveLine([0, 1, 2], broadcast=True)``, the line of any of its qudits
+    is that one line, whose one tone reaches all of them, and a drive on it
+    drives every one. ``get_drive_line(a, b, c)``, with all the line's
+    qudits, gives the same line and says what it reaches.
+
     Args:
         qudit: The qudit whose drive line to use.
+        others: The other qudits of a broadcast drive line, when the line
+            is named by all its qudits.
     """
     return _require_context("get_drive_line")
 

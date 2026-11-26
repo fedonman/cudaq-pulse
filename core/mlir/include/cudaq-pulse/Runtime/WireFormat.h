@@ -95,11 +95,4 @@ constexpr uint32_t fnv1a32(std::string_view name) {
 
 static_assert(fnv1a32("enqueue_syndromes") == 0x7ED8BE82u);
 
-/// Write `bits` (one byte per bit, 0 or 1) bit-packed LSB-first at `out`.
-inline void packBits(const uint8_t *bits, size_t count, uint8_t *out) {
-  std::memset(out, 0, (count + 7) / 8);
-  for (size_t i = 0; i < count; ++i)
-    out[i / 8] |= static_cast<uint8_t>((bits[i] & 1u) << (i % 8));
-}
-
 } // namespace cudaq_pulse::wire

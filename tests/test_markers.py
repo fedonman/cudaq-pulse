@@ -19,7 +19,12 @@ def test_every_registered_marker_is_used():
     registered = {line.split(":", 1)[0].strip() for line in markers}
     used = set()
     for path in _TESTS.rglob("*.py"):
-        used.update(re.findall(r"pytest\.mark\.(\w+)", path.read_text()))
+        # tests/test_levels.py writes the level markers in the files of a
+        # small project of its own: that is no use of them in this suite.
+        if path.name != "test_levels.py":
+            used.update(re.findall(r"pytest\.mark\.(\w+)", path.read_text()))
+    # A level is used when the level table gives it to a test.
+    used.update(tomllib.loads((_TESTS / "levels.toml").read_text()))
     assert registered <= used
 
 

@@ -114,11 +114,13 @@ pulse's ``phase_rad`` and the export's ``phase_rad``.
 .. test: test_amplitude_times_duration_is_the_rotation_angle
 
 **Amplitudes.** On a qudit whose drive gives ``amplitude_scale_rad_per_ns``
-(``MicrowaveDrive(amplitude_scale_rad_per_ns=s)``), amplitude ``a`` is a
-Rabi rate of ``a * s`` radians per nanosecond: a square pulse of amplitude
-``a`` for ``t`` ns turns the qudit by ``a * s * t`` radians, so with
-``s = 1`` a 20 ns pi pulse has amplitude ``pi / 20``. Without a scale,
-amplitude 1 is the system's own unit (see :doc:`quantum_systems`).
+(``MicrowaveDrive(amplitude_scale_rad_per_ns=s)``, or
+``Drive(amplitude_scale_rad_per_ns=s)`` for a drive of another modality),
+amplitude ``a`` is a Rabi rate of ``a * s`` radians per nanosecond: a square
+pulse of amplitude ``a`` for ``t`` ns turns the qudit by ``a * s * t``
+radians, so with ``s = 1`` a 20 ns pi pulse has amplitude ``pi / 20``.
+Without a scale, amplitude 1 is the system's own unit (see
+:doc:`quantum_systems`).
 
 .. code-block:: python
 

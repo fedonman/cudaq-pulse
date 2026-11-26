@@ -32,6 +32,8 @@
 #include <thread>
 #include <unordered_map>
 
+#include "llvm/ADT/StringMap.h"
+#include "llvm/ADT/StringSet.h"
 #include "mlir/AsmParser/AsmParser.h"
 #include "mlir/Bytecode/BytecodeWriter.h"
 #include "mlir/Conversion/ArithToLLVM/ArithToLLVM.h"
@@ -85,7 +87,10 @@
 #define GET_OP_CLASSES
 #include "cudaq-pulse/Dialect/Classical/ClassicalOps.h.inc"
 
+#include "ContextDialects.h"
 #include "LengthInference.h"
+#include "ModuleLoader.h"
+#include "SegmentBoundaries.h"
 #include "cudaq-pulse/Analysis/ClassicalTiming.h"
 #include "cudaq-pulse/Analysis/Execution.h"
 #include "cudaq-pulse/Analysis/LineGrid.h"
@@ -189,6 +194,7 @@ constexpr int kOpClassicalCompare = 39;
 constexpr int kOpVariableWait = 40;
 constexpr int kOpSelect = 41;
 constexpr int kOpMaxCycles = 42;
+constexpr int kOpSite = 43;
 // A payload length of 0xFF means the length is in the next word.
 constexpr int kExtendedPayload = 0xFF;
 
@@ -552,7 +558,13 @@ public:
               std::this_thread::get_id() != owner_)
             return mlir::failure();
           llvm::raw_string_ostream os(messages_);
-          os << "\n  " << diagnostic.getLocation() << ": " << diagnostic;
+          // An op numbered for idle replacement reads as one with no
+          // location, as the same op compiled without the rule does.
+          mlir::Location where = diagnostic.getLocation();
+          if (auto site = mlir::dyn_cast<mlir::FileLineColLoc>(where);
+              site && site.getFilename().getValue() == "pulse.site")
+            where = mlir::UnknownLoc::get(where.getContext());
+          os << "\n  " << where << ": " << diagnostic;
           for (mlir::Diagnostic &note : diagnostic.getNotes())
             os << "\n    note: " << note;
           return mlir::success();
@@ -668,6 +680,33 @@ public:
   }
   ContextStore(const ContextStore &) = delete;
   ContextStore &operator=(const ContextStore &) = delete;
+
+  /// The frozen pattern set of `context` kept under `key`, made by `make`
+  /// the first time (outside the lock: two threads may both make it, and
+  /// the first kept is the one every caller gets). A context without a
+  /// store keeps none: each call makes the set anew.
+  static std::shared_ptr<const mlir::FrozenRewritePatternSet>
+  frozen(mlir::MLIRContext *context, const std::string &key,
+         llvm::function_ref<mlir::RewritePatternSet()> make) {
+    {
+      std::lock_guard<std::mutex> guard(lock());
+      auto found = contexts().find(context);
+      if (found != contexts().end()) {
+        auto &sets = found->second->patternSets;
+        if (auto it = sets.find(key); it != sets.end())
+          return it->second;
+      }
+    }
+    auto made = std::make_shared<const mlir::FrozenRewritePatternSet>(make());
+    std::lock_guard<std::mutex> guard(lock());
+    auto found = contexts().find(context);
+    if (found == contexts().end())
+      return made;
+    auto &sets = found->second->patternSets;
+    if (sets.size() >= kMaxPatternSets && !sets.count(key))
+      sets.clear();
+    return sets.emplace(key, std::move(made)).first->second;
+  }
 
   /// A kept pass manager of `context` built with `options`, or null.
   static std::unique_ptr<mlir::PassManager> take(mlir::MLIRContext *context,
@@ -804,6 +843,11 @@ private:
   std::unique_ptr<AttrNames> attrNames;
   static constexpr size_t kMaxTexts = 64;
   std::unordered_map<std::string, mlir::Attribute> texts;
+  // Frozen pattern sets by key (canonicalPatternsFor, foldBinding).
+  static constexpr size_t kMaxPatternSets = 64;
+  std::unordered_map<std::string,
+                     std::shared_ptr<const mlir::FrozenRewritePatternSet>>
+      patternSets;
 
   // Never destroyed, as the shared pool's last context is not.
   static std::mutex &lock() {
@@ -816,6 +860,197 @@ private:
     return *all;
   }
 };
+
+// ---- The canonicalization patterns a binding's module can match ----
+//
+// Folding a binding's module (foldBinding) runs the canonicalizer's patterns
+// on it. MLIR sorts every pattern of the set by benefit each time it applies
+// them, so a module takes only the patterns rooted at an op it holds or can
+// come to hold: its own op names, closed under the ops each kept pattern
+// makes. A pattern declares those (RewritePattern::getGeneratedOps); the
+// table below lists them for the patterns that declare none.
+
+/// The ops a canonicalization pattern that declares none can make, by
+/// "root|debug name" (an empty list: it makes none, only moving, inlining or
+/// erasing ops). Read from the patterns' sources at the pinned MLIR
+/// (llvmorg-22.1.8): RE-READ THIS TABLE WHEN THE TOOLCHAIN IS BUMPED. A
+/// pattern that declares nothing and is not listed here makes every module
+/// take the whole set; tests/test_canonical_patterns.py fails and names it.
+const llvm::StringMap<llvm::SmallVector<llvm::StringRef, 4>> &
+undeclaredMakes() {
+  static const auto *table = [] {
+    auto *t = new llvm::StringMap<llvm::SmallVector<llvm::StringRef, 4>>();
+    auto add = [&](llvm::StringRef key,
+                   std::initializer_list<llvm::StringRef> made) {
+      (*t)[key] = llvm::SmallVector<llvm::StringRef, 4>(made);
+    };
+    add("arith.cmpf|CmpFIntToFPConst", {"arith.cmpi", "arith.constant"});
+    add("arith.index_castui|{anonymous}::IndexCastUIOfIndexCastUI", {});
+    add("arith.index_cast|{anonymous}::IndexCastOfIndexCast", {});
+    add("arith.select|SelectToExtUI",
+        {"arith.constant", "arith.extui", "arith.xori"});
+    add("func.call_indirect|", {"func.call"});
+    add("scf.execute_region|MultiBlockExecuteInliner", {"cf.br"});
+    add("scf.execute_region|SingleBlockExecuteInliner", {});
+    for (llvm::StringRef root : {"scf.execute_region", "scf.for", "scf.if",
+                                 "scf.index_switch", "scf.while"})
+      for (llvm::StringRef name :
+           {"{anonymous}::MakeRegionBranchOpSuccessorInputsDead",
+            "{anonymous}::RemoveDeadRegionBranchOpSuccessorInputs",
+            "{anonymous}::RemoveDuplicateSuccessorInputUses"})
+        add((root + "|" + name).str(), {});
+    add("scf.forall|{anonymous}::FoldTensorCastOfOutputIntoForallOp",
+        {"scf.forall", "tensor.cast"});
+    add("scf.forall|{anonymous}::ForallOpControlOperandsFolder", {});
+    add("scf.forall|{anonymous}::ForallOpIterArgsFolder", {});
+    add("scf.forall|{anonymous}::ForallOpReplaceConstantInductionVar", {});
+    add("scf.forall|{anonymous}::ForallOpSingleOrZeroIterationDimsFolder",
+        {"scf.forall"});
+    add("scf.for|{anonymous}::ForOpTensorCastFolder", {"tensor.cast"});
+    add("scf.for|{anonymous}::SimplifyTrivialLoops", {});
+    add("scf.if|{anonymous}::CombineIfs", {"scf.if", "scf.yield"});
+    add("scf.if|{anonymous}::CombineNestedIfs",
+        {"scf.if", "scf.yield", "arith.andi", "arith.select"});
+    add("scf.if|{anonymous}::ConditionPropagation", {"arith.constant"});
+    add("scf.if|{anonymous}::ConvertTrivialIfToSelect",
+        {"scf.if", "scf.yield", "arith.select"});
+    add("scf.if|{anonymous}::RemoveEmptyElseBranch", {});
+    add("scf.if|{anonymous}::RemoveStaticCondition", {});
+    add("scf.if|{anonymous}::ReplaceIfYieldWithConditionOrValue",
+        {"arith.xori", "arith.constant"});
+    add("scf.index_switch|FoldConstantCase", {});
+    add("scf.parallel|{anonymous}::MergeNestedParallelLoops", {"scf.parallel"});
+    add("scf.parallel|{anonymous}::ParallelOpSingleOrZeroIterationDimsFolder",
+        {"scf.parallel"});
+    add("scf.while|{anonymous}::WhileCmpCond", {"arith.constant"});
+    add("scf.while|{anonymous}::WhileConditionTruth", {"arith.constant"});
+    add("scf.while|{anonymous}::WhileMoveIfDown", {"scf.while"});
+    add("scf.while|{anonymous}::WhileOpAlignBeforeArgs",
+        {"scf.condition", "scf.while"});
+    add("tensor.dim|{anonymous}::DimOfForallOp", {});
+    return t;
+  }();
+  return *table;
+}
+
+/// "root|debug name" of `pattern`, "*" for a pattern rooted at any op. A
+/// debug name is the pattern's type name as the compiler spells it: an
+/// anonymous namespace is "{anonymous}" for GCC and "(anonymous namespace)"
+/// for Clang, spelled the first way here.
+std::string patternKey(const mlir::RewritePattern &pattern) {
+  std::optional<mlir::OperationName> root = pattern.getRootKind();
+  std::string name = pattern.getDebugName().str();
+  for (size_t at;
+       (at = name.find("(anonymous namespace)")) != std::string::npos;)
+    name.replace(at, std::strlen("(anonymous namespace)"), "{anonymous}");
+  return (root ? root->getStringRef().str() : std::string("*")) + "|" + name;
+}
+
+/// The canonicalization patterns of `context`'s loaded dialects and
+/// registered ops, as the canonicalizer gathers them.
+mlir::RewritePatternSet allCanonicalPatterns(mlir::MLIRContext *context) {
+  mlir::RewritePatternSet set(context);
+  for (mlir::Dialect *dialect : context->getLoadedDialects())
+    dialect->getCanonicalizationPatterns(set);
+  for (mlir::RegisteredOperationName op : context->getRegisteredOperations())
+    op.getCanonicalizationPatterns(set, context);
+  return set;
+}
+
+/// The patterns of `all` that declare no ops they make and are not in
+/// undeclaredMakes(), by key.
+std::vector<std::string> unlistedPatterns(mlir::RewritePatternSet &all) {
+  std::vector<std::string> unlisted;
+  for (const std::unique_ptr<mlir::RewritePattern> &pattern :
+       all.getNativePatterns())
+    if (pattern->getGeneratedOps().empty() &&
+        !undeclaredMakes().count(patternKey(*pattern)))
+      unlisted.push_back(patternKey(*pattern));
+  return unlisted;
+}
+
+/// Of `all`, the patterns a module holding the ops `held` can match while it
+/// is canonicalized: those rooted at any op, and those rooted at an op of
+/// `held` closed under what each kept pattern makes. All of `all` if a
+/// pattern on the way declares nothing and is not listed.
+mlir::RewritePatternSet reachablePatterns(mlir::MLIRContext *context,
+                                          mlir::RewritePatternSet all,
+                                          const llvm::StringSet<> &held) {
+#if MLIR_ENABLE_PDL_IN_PATTERNMATCH
+  // Patterns in PDL are not sorted out here: all of them, then.
+  if (all.getPDLPatterns().getModule())
+    return all;
+#endif
+  llvm::StringSet<> roots = held;
+  // What folding makes: the constants it materializes.
+  roots.insert("arith.constant");
+  roots.insert("ub.poison");
+  auto &patterns = all.getNativePatterns();
+  for (bool grew = true; grew;) {
+    grew = false;
+    for (const std::unique_ptr<mlir::RewritePattern> &pattern : patterns) {
+      std::optional<mlir::OperationName> root = pattern->getRootKind();
+      if (root && !roots.contains(root->getStringRef()))
+        continue;
+      llvm::ArrayRef<mlir::OperationName> declared = pattern->getGeneratedOps();
+      if (!declared.empty()) {
+        for (mlir::OperationName made : declared)
+          grew |= roots.insert(made.getStringRef()).second;
+        continue;
+      }
+      auto listed = undeclaredMakes().find(patternKey(*pattern));
+      if (listed == undeclaredMakes().end())
+        return all;
+      for (llvm::StringRef made : listed->second)
+        grew |= roots.insert(made).second;
+    }
+  }
+  mlir::RewritePatternSet kept(context);
+  for (std::unique_ptr<mlir::RewritePattern> &pattern : patterns) {
+    std::optional<mlir::OperationName> root = pattern->getRootKind();
+    if (!root || roots.contains(root->getStringRef()))
+      kept.add(std::move(pattern));
+  }
+  return kept;
+}
+
+/// Whether CUDAQ_PULSE_FULL_CANONICAL=1 asks folding to take every
+/// canonicalization pattern, as the canonicalizer does: the tests compare
+/// what it makes with what the patterns a module can match make. Read once
+/// per process.
+bool fullCanonicalSet() {
+  static const bool on = [] {
+    const char *text = std::getenv("CUDAQ_PULSE_FULL_CANONICAL");
+    return text && std::strcmp(text, "1") == 0;
+  }();
+  return on;
+}
+
+/// The canonicalization patterns `module` can match while it is folded,
+/// frozen once per context for each set of op names.
+std::shared_ptr<const mlir::FrozenRewritePatternSet>
+canonicalPatternsFor(mlir::MLIRContext *context, mlir::ModuleOp module) {
+  if (fullCanonicalSet())
+    return ContextStore::frozen(
+        context,
+        "canonical:*:" + std::to_string(context->getLoadedDialects().size()),
+        [&] { return allCanonicalPatterns(context); });
+  std::set<std::string> names;
+  module.walk([&](mlir::Operation *op) {
+    names.insert(op->getName().getStringRef().str());
+  });
+  // Patterns of a dialect loaded since may be rooted at these ops too.
+  std::string key =
+      "canonical:" + std::to_string(context->getLoadedDialects().size()) + ":";
+  llvm::StringSet<> held;
+  for (const std::string &name : names) {
+    key += name + ",";
+    held.insert(name);
+  }
+  return ContextStore::frozen(context, key, [&] {
+    return reachablePatterns(context, allCanonicalPatterns(context), held);
+  });
+}
 
 /// A new context with `registry`'s dialects and its ContextStore, destroyed
 /// before it.
@@ -967,9 +1202,16 @@ struct SegmentWalk {
         return false;
       segment += *moved;
     }
+    skips.push_back({static_cast<int64_t>(boundaries.size()), count() + 1,
+                     count() - from.opened, times});
     skipped += *more;
     return true;
   }
+
+  /// Of each loop skip() counted iterations of: how many boundaries were
+  /// visited before them, the first segment they open, how many each
+  /// opens, and how many they are.
+  std::vector<std::array<int64_t, 4>> skips;
 
   int64_t timelineOf(mlir::Operation *op) {
     if (AttrNames::has(op, names.timeline))
@@ -2532,7 +2774,8 @@ private:
                readouts = key("readouts"), result = key("result"),
                role = key("role"), runtime = key("runtime"),
                samples = key("samples"), shape = key("shape"),
-               start = key("start_cycles"), test = key("test"),
+               start = key("start_cycles"), term = key("term"),
+               table = key("terms"), test = key("test"),
                timeout = key("timeout_ns"), tone = key("tone"),
                type = key("type"), unknown = key("unknown"),
                value = key("value"), values = key("values"), wait = key("wait"),
@@ -2648,6 +2891,27 @@ private:
 
   nb::object expression(int32_t index) {
     using Expression = ControllerEventWalk::Expression;
+    return walk->written(
+        index, [&](int32_t at) { return leaf(at); },
+        [&](int n) {
+          nb::object out = dict();
+          put(out, keys.term, integer(n));
+          return out;
+        },
+        [&](const Expression &e, nb::handle of, nb::handle table) {
+          nb::object out = dict();
+          if (table.is_valid())
+            put(out, keys.table, table);
+          put(out, keys.op, keys.terms[e.term]);
+          put(out, keys.type, keys.types[e.type]);
+          put(out, keys.of, of);
+          return out;
+        });
+  }
+
+  /// What is no term of an expression.
+  nb::object leaf(int32_t index) {
+    using Expression = ControllerEventWalk::Expression;
     const Expression &e = walk->expressions[index];
     if (e.kind == Expression::Number)
       return textNumber(e.number);
@@ -2669,14 +2933,8 @@ private:
       put(out, keys.answer, integer(e.event));
       put(out, keys.result, integer(e.result));
       break;
-    default: {
-      put(out, keys.op, keys.terms[e.term]);
-      put(out, keys.type, keys.types[e.type]);
-      nb::list of = list(e.of.size());
-      for (size_t i = 0; i < e.of.size(); ++i)
-        set(of, i, expression(e.of[i]));
-      put(out, keys.of, of);
-    }
+    default:
+      break;
     }
     return out;
   }
@@ -3238,6 +3496,8 @@ public:
           throw std::runtime_error("Cannot add pass: " + pass.str());
       }
     flush();
+    if (build)
+      cudaq_pulse::requireLoadedDialects(pm, ctx_.get(), "run_passes");
     programs_.clear();
     bool verify = verifyEverything();
     runPipelineVerifyingOnce(pm, *module_, "MLIR pass pipeline failed", verify);
@@ -3302,10 +3562,13 @@ public:
 
   std::string run_full_lowering() {
     std::lock_guard<std::recursive_mutex> guard(*lock_);
-    // Lower a clone so inspection does not consume the scheduled Pulse module;
+    // Lower a copy so inspection does not consume the scheduled Pulse module;
     // callers may lower repeatedly and still execute the original artifact.
-    auto lowered = mlir::OwningOpRef<mlir::ModuleOp>(module_->clone());
-    mlir::PassManager pm(ctx_.get());
+    // The copy is in a context this thread keeps for lowering: the module's
+    // context is shared and has no LLVM dialect, and loading one there would
+    // race with the threads working in it (ContextDialects.h).
+    auto lowered = cudaq_pulse::copyForLowering(*module_, makeRegistry);
+    mlir::PassManager pm(lowered->getContext());
     pm.addPass(pulse::createPulseToQOpPass());
     pm.addPass(qop::createQOpToCuDensityMatPass());
     pm.addPass(cudm::createCuDensityMatToLLVMPass());
@@ -3482,6 +3745,146 @@ public:
     return nb::make_tuple(root);
   }
 
+  // ── Sites: the traced ops of a program, for idle replacement ────────
+  //
+  // The frontend numbers every drive, readout, wait, sync and frame change
+  // it traces. A number is kept as the op's location, which no pass reads
+  // and the printed module does not show, so a numbered module compiles as
+  // the same module without numbers; a copy of an op (a peeled or unrolled
+  // loop iteration) keeps its number, and so does the op a rewrite makes
+  // of several (the first of them). An op written into an idle window has
+  // a negative number and, until the numbers are removed, the attribute
+  // `pulse.written`: the rewrites keep it apart from the kernel's own ops
+  // (a written wait is not merged, a written drive not fused with one of
+  // the kernel's).
+
+  /// The site number a packed site record gave `op`, if any.
+  static std::optional<int64_t> siteOf(mlir::Operation *op) {
+    auto loc = mlir::dyn_cast<mlir::FileLineColLoc>(op->getLoc());
+    if (!loc || loc.getFilename().getValue() != "pulse.site")
+      return std::nullopt;
+    int64_t line = loc.getLine();
+    return loc.getColumn() ? -line - 1 : line;
+  }
+
+  /// Remove the site numbers the packed site records gave, from the module and
+  /// from its source before scheduling.
+  void strip_sites() {
+    std::lock_guard<std::recursive_mutex> guard(*lock_);
+    mlir::Location unknown = mlir::UnknownLoc::get(ctx_.get());
+    auto strip = [&](mlir::ModuleOp module) {
+      module.walk([&](mlir::Operation *op) {
+        if (siteOf(op))
+          op->setLoc(unknown);
+        op->removeAttr("pulse.written");
+      });
+    };
+    strip(*module_);
+    if (source_)
+      strip(*source_);
+  }
+
+  /// The lines, (role, qudit) in allocation order, and the scheduled
+  /// program as a list of nodes in program order, linear in its ops:
+  /// - (kind, site, line, tone, start_cycles, duration_cycles, shifts,
+  ///   barrier) for a drive, readout, wait or frame change ("drive",
+  ///   "readout", "wait", "shift_phase", "set_phase", "shift_frequency",
+  ///   "set_frequency"): its number (None without one), its line (-1 for a
+  ///   frame change), the line whose tone it plays or changes (-1 for a wait
+  ///   and for a tone that is no line's own), its start at the first
+  ///   iteration of the loops around it and that start's shift per iteration
+  ///   of each, outermost first, and whether its length is known only when
+  ///   the program runs;
+  /// - ("sync", site, lines);
+  /// - ("answer",) for a blocking wait on a classical answer;
+  /// - ("for", trips, nodes) for a loop;
+  /// - ("if", nodes, nodes) for the two arms of a branch.
+  nb::tuple site_tree() {
+    std::lock_guard<std::recursive_mutex> guard(*lock_);
+    llvm::DenseMap<mlir::Operation *, int64_t> lineIndex;
+    nb::list lines;
+    module_->walk([&](mlir::Operation *op) {
+      if (!mlir::isa<pulse::GetDriveLineOp, pulse::GetReadoutLineOp>(op))
+        return;
+      lineIndex.try_emplace(op, static_cast<int64_t>(lineIndex.size()));
+      lines.append(nb::make_tuple(
+          mlir::isa<pulse::GetDriveLineOp>(op) ? "drive" : "readout",
+          pulse::quditOf(op)));
+    });
+    llvm::SmallVector<int64_t, 2> iteration;
+    pulse::AllocationTracer trace;
+    std::optional<AttrNames> ownNames;
+    const AttrNames &names = ContextStore::names(ctx_.get(), ownNames);
+    auto indexOf = [&](mlir::Value value) -> int64_t {
+      mlir::Operation *allocation = trace(value);
+      if (!allocation)
+        return -1;
+      auto found = lineIndex.find(allocation);
+      return found == lineIndex.end() ? -1 : found->second;
+    };
+    auto site = [](mlir::Operation &op) -> nb::object {
+      std::optional<int64_t> number = siteOf(&op);
+      return number ? nb::cast(*number) : nb::none();
+    };
+    std::function<void(mlir::Block &, nb::list &)> build =
+        [&](mlir::Block &block, nb::list &out) {
+          for (mlir::Operation &op : block) {
+            bool played = mlir::isa<pulse::DriveOp, pulse::ReadoutOp>(op);
+            bool wait = mlir::isa<pulse::WaitOp>(op);
+            if (played || wait ||
+                mlir::isa<pulse::ShiftPhaseOp, pulse::SetPhaseOp,
+                          pulse::ShiftFrequencyOp, pulse::SetFrequencyOp>(op)) {
+              std::optional<int64_t> start =
+                  pulse::scheduledStart(&op, iteration);
+              nb::list shifts;
+              if (start)
+                for (int64_t &k : iteration) {
+                  k = 1;
+                  std::optional<int64_t> next =
+                      pulse::scheduledStart(&op, iteration);
+                  k = 0;
+                  shifts.append(next ? nb::cast(*next - *start) : nb::none());
+                }
+              out.append(nb::make_tuple(
+                  op.getName().stripDialect().str(), site(op),
+                  played || wait ? indexOf(op.getOperand(0)) : int64_t{-1},
+                  wait ? int64_t{-1} : indexOf(op.getOperand(played ? 2 : 0)),
+                  start, pulse::scheduledDuration(&op), shifts,
+                  AttrNames::has(&op, names.variable)));
+            } else if (mlir::isa<pulse::SyncOp>(op)) {
+              nb::list joined;
+              for (mlir::Value line : op.getOperands())
+                joined.append(indexOf(line));
+              out.append(nb::make_tuple("sync", site(op), joined));
+            } else if (mlir::isa<classical::WaitOp>(op)) {
+              if (AttrNames::has(&op, names.blocking))
+                out.append(nb::make_tuple("answer"));
+            } else if (auto loop = mlir::dyn_cast<mlir::scf::ForOp>(op)) {
+              int64_t trips = pulse::constantTripCount(loop).value_or(0);
+              nb::list body;
+              iteration.push_back(0);
+              build(*loop.getBody(), body);
+              iteration.pop_back();
+              out.append(
+                  nb::make_tuple("for", std::max<int64_t>(trips, 0), body));
+            } else if (auto branch = mlir::dyn_cast<mlir::scf::IfOp>(op)) {
+              nb::list then, other;
+              build(branch.getThenRegion().front(), then);
+              if (!branch.getElseRegion().empty())
+                build(branch.getElseRegion().front(), other);
+              out.append(nb::make_tuple("if", then, other));
+            } else {
+              for (mlir::Region &region : op.getRegions())
+                for (mlir::Block &nested : region)
+                  build(nested, out);
+            }
+          }
+        };
+    nb::list root;
+    build(*module_->getBody(), root);
+    return nb::make_tuple(lines, root);
+  }
+
   /// (role, qudit): a runtime qudit's line has qudit -1.
   using ControllerLine = std::tuple<std::string, int64_t>;
 
@@ -3521,10 +3924,13 @@ public:
   /// boundary) has its events once, no event has a tone id or frame
   /// changes, and `repeats` gets each such loop's ControllerEventWalk::Repeat;
   /// with a list `periods` too, its lines may repeat at periods of their
-  /// own, and `periods` gets them (ControllerEventWalk::linePeriods).
+  /// own, and `periods` gets them (ControllerEventWalk::linePeriods). A
+  /// list `segments` gets, of a module with classical calls, the segment
+  /// boundaries the walk visited (as segment_boundaries() gives them) and
+  /// then SegmentWalk::skips, the iterations it did not visit.
   nb::tuple controller_events(nb::handle parameters, nb::handle amplitudes,
                               nb::object slots, nb::object repeats,
-                              nb::object periods) {
+                              nb::object periods, nb::object segments) {
     ControllerObjects objects(parameters, amplitudes);
     std::unique_ptr<ControllerEventWalk> walk;
     std::vector<ControllerLine> lines;
@@ -3537,6 +3943,11 @@ public:
     }
     lineSlots(found, slots);
     appendRepeats(*walk, repeats, periods);
+    if (!segments.is_none() && walk->segmentWalk) {
+      auto out = nb::borrow<nb::list>(segments);
+      out.append(nb::cast(walk->segmentWalk->boundaries));
+      out.append(nb::cast(walk->segmentWalk->skips));
+    }
     return nb::make_tuple(objects.lines(lines), objects.events(*walk));
   }
 
@@ -3698,7 +4109,7 @@ public:
     out.reserve(walk.result.size());
     for (size_t i = 0; i < walk.result.size(); ++i) {
       const ControllerRecord &r = walk.result[i];
-      bool loop = std::strcmp(r.kind, "loop") == 0;
+      bool loop = isKind(r.kind, "loop");
       out.emplace_back(r.kind, loop ? r.trips : -1,
                        std::move(walk.dependencies[i]));
     }
@@ -4208,7 +4619,13 @@ public:
     if (!classical::declaresClassicalCalls(*module_))
       return {};
     SegmentWalk walk(*module_);
-    walk.run(*module_->getBody(), [](mlir::Operation *, int64_t) {});
+    // Only where segments open is asked for: the iterations of a loop that
+    // opens none are not walked (SegmentBoundaries.h).
+    cudaq_pulse::walkSegmentBoundaries(
+        *module_->getBody(), walk.names.variable, walk.names.blocking,
+        [&](mlir::Operation *op, llvm::ArrayRef<int64_t> iteration) {
+          walk.visit(op, iteration);
+        });
     return std::move(walk.boundaries);
   }
 
@@ -5079,16 +5496,22 @@ public:
     dropArguments(funcOp);
 
     // Fold parameter expressions before deriving concrete durations.
-    foldBinding(clonedModule, bound);
+    foldBinding(clonedModule, bound, placed);
     auto owning = mlir::OwningOpRef<mlir::ModuleOp>(clonedModule);
     PulseModule result(ctx_, std::move(owning));
     result.loops_ = loops_;
     result.runTime_ = runTime_;
     result.keepSource();
-    runSchedule(*result.module_, true, schedule, maxDrives, maxReadouts,
-                readoutLatency, switchPenalty,
-                "specialize: pass pipeline failed", specialized_.frameChanges,
-                verifyEverything());
+    try {
+      runSchedule(*result.module_, true, schedule, maxDrives, maxReadouts,
+                  readoutLatency, switchPenalty,
+                  "specialize: pass pipeline failed", specialized_.frameChanges,
+                  verifyEverything());
+    } catch (const std::runtime_error &error) {
+      // Values that take the schedule past a controller's longest program
+      // are what is wrong: an error of the values.
+      pulse::rethrowPastProgramLimit(error);
+    }
     // Verified, or trusted as the verified module it is rescheduled from.
     result.verified();
     return result;
@@ -5780,6 +6203,9 @@ private:
   void changed() {
     ++version_;
     specialized_.ops.store(-1);
+    // The canonicalization patterns were chosen for the ops the module held.
+    canonicalPatterns_[0].reset();
+    canonicalPatterns_[1].reset();
   }
 
   /// Note that the module, as it is now, has been verified.
@@ -5848,8 +6274,11 @@ private:
   /// `values`: as the canonicalizer does, then with the pattern passes this
   /// module ran, on the only ops the values can open to them, frame changes
   /// by a constant phase and drives of a square pulse, if the values reach
-  /// one. Both pattern sets are gathered once per module.
-  void foldBinding(mlir::ModuleOp module, llvm::ArrayRef<mlir::Value> values) {
+  /// one. Both pattern sets are gathered once per module, the canonical one
+  /// for its bindings placed on slots (which allocate qudits) and once for
+  /// the others.
+  void foldBinding(mlir::ModuleOp module, llvm::ArrayRef<mlir::Value> values,
+                   bool placed) {
     bool phases = false, amplitudes = false;
     if (!rewrites_.empty()) {
       // What the values reach, as mlir::getForwardSlice gathers it (the
@@ -5880,20 +6309,15 @@ private:
       }
     }
 
-    if (!canonicalPatterns_) {
-      mlir::RewritePatternSet set(ctx_.get());
-      for (mlir::Dialect *dialect : ctx_->getLoadedDialects())
-        dialect->getCanonicalizationPatterns(set);
-      for (mlir::RegisteredOperationName op : ctx_->getRegisteredOperations())
-        op.getCanonicalizationPatterns(set, ctx_.get());
-      canonicalPatterns_ =
-          std::make_shared<const mlir::FrozenRewritePatternSet>(std::move(set));
-    }
+    std::shared_ptr<const mlir::FrozenRewritePatternSet> &canonical =
+        canonicalPatterns_[placed];
+    if (!canonical)
+      canonical = canonicalPatternsFor(ctx_.get(), module);
     // The canonicalizer pass's defaults.
     mlir::GreedyRewriteConfig config;
     config.setRegionSimplificationLevel(
         mlir::GreedySimplifyRegionLevel::Normal);
-    (void)mlir::applyPatternsGreedily(module, *canonicalPatterns_, config);
+    (void)mlir::applyPatternsGreedily(module, *canonical, config);
     if (!phases && !amplitudes)
       return;
 
@@ -5912,11 +6336,16 @@ private:
     if (ops.empty())
       return;
     if (!rewritePatterns_) {
-      mlir::RewritePatternSet set(ctx_.get());
+      // One frozen set per context for each list of stages.
+      std::string key = "rewrite:";
       for (const pulse::RewriteStage *stage : rewrites_)
-        stage->populate(set);
-      rewritePatterns_ =
-          std::make_shared<const mlir::FrozenRewritePatternSet>(std::move(set));
+        key += stage->argument.str() + ",";
+      rewritePatterns_ = ContextStore::frozen(ctx_.get(), key, [&] {
+        mlir::RewritePatternSet set(ctx_.get());
+        for (const pulse::RewriteStage *stage : rewrites_)
+          stage->populate(set);
+        return set;
+      });
     }
     mlir::GreedyRewriteConfig opConfig;
     opConfig.enableFolding(false).enableConstantCSE(false);
@@ -5927,8 +6356,9 @@ private:
   // The pattern passes run_passes ran that rerun on a binding
   // (pulse-fold-phases, pulse-fuse-pulses), in the order first run.
   llvm::SmallVector<const pulse::RewriteStage *, 4> rewrites_;
-  // What foldBinding rewrites with, once gathered.
-  std::shared_ptr<const mlir::FrozenRewritePatternSet> canonicalPatterns_;
+  // What foldBinding rewrites with, once gathered: the canonical patterns
+  // of the bindings not placed on slots, then of those placed.
+  std::shared_ptr<const mlir::FrozenRewritePatternSet> canonicalPatterns_[2];
   std::shared_ptr<const mlir::FrozenRewritePatternSet> rewritePatterns_;
   // Lowered operator programs by module attribute dictionary.
   std::map<const void *, ProgramTemplate> programs_;
@@ -5957,8 +6387,9 @@ private:
 // -----------------------------------------------------------------------
 // PulseModuleBuilder: decode a packed int64 buffer into in-memory Pulse IR
 // -----------------------------------------------------------------------
-/// Loading the dialects into a new context costs about 0.4 ms, so builders
-/// share a context. A context keeps every attribute it ever uniqued (each
+/// Loading the dialects into a new context takes a fraction of a millisecond,
+/// so builders share a context, made with the dialects its modules can hold
+/// (ContextDialects.h). A context keeps every attribute it ever uniqued (each
 /// compile with new qubit frequencies, for instance, adds a few hundred bytes
 /// per qubit), so it is retired after a number of builders or once the
 /// programs built in it reach a number of packed words, whichever comes
@@ -5987,7 +6418,7 @@ public:
     auto &pool = state();
     if (!pool.current || ++pool.uses > limits.modules ||
         pool.words >= limits.words) {
-      pool.current = makeContext(makeRegistry());
+      pool.current = makeContext(cudaq_pulse::sharedContextDialects());
       pool.current->loadAllAvailableDialects();
       pool.uses = 1;
       pool.words = 0;
@@ -7527,6 +7958,42 @@ public:
         break;
       }
 
+      case kOpSite: {
+        // [site number, kind: 0 drive, 1 readout, 2 wait, 3 sync, 4 frame
+        // change] of the op just built, written by idle replacement's trace
+        // only: the op's location is pulse.site:<number>, and an op written
+        // into an idle window (a negative number) is marked pulse.written.
+        requirePayload(2);
+        mlir::Block *block = builder_->getInsertionBlock();
+        auto at = builder_->getInsertionPoint();
+        if (!block || at == block->begin())
+          throw std::invalid_argument("packed: a site record follows no op");
+        mlir::Operation *op = &*std::prev(at);
+        int64_t kind =
+            mlir::isa<pulse::DriveOp>(op)     ? 0
+            : mlir::isa<pulse::ReadoutOp>(op) ? 1
+            : mlir::isa<pulse::WaitOp>(op)    ? 2
+            : mlir::isa<pulse::SyncOp>(op)    ? 3
+            : mlir::isa<pulse::ShiftPhaseOp, pulse::SetPhaseOp,
+                        pulse::ShiftFrequencyOp, pulse::SetFrequencyOp>(op)
+                ? 4
+                : -1;
+        if (kind != p[1])
+          throw std::invalid_argument(
+              "packed: a site record names another kind of op");
+        int64_t site = p[0];
+        if (site < INT32_MIN || site > INT32_MAX)
+          throw std::invalid_argument("packed: a site is out of range");
+        op->setLoc(mlir::FileLineColLoc::get(
+            builder_->getContext(), "pulse.site",
+            static_cast<unsigned>(site < 0 ? -site - 1 : site),
+            site < 0 ? 1 : 0));
+        if (site < 0)
+          op->setAttr("pulse.written",
+                      mlir::UnitAttr::get(builder_->getContext()));
+        break;
+      }
+
       default:
         throw std::invalid_argument("packed: unknown opcode " +
                                     std::to_string(opcode));
@@ -7578,6 +8045,37 @@ public:
       result.rewrites_.push_back(stage);
     }
     return result;
+  }
+
+  /// What load() reads from another compiler's module and the module it
+  /// writes from it (ModuleLoader.h), on this builder's context. The
+  /// arguments go on as Python gives them: what reads them is built apart
+  /// from the code that compiles a kernel.
+  static nb::object loaded(PyObject *made) {
+    if (!made)
+      throw nb::python_error();
+    return nb::steal(made);
+  }
+  nb::object load_callables(nb::handle module) {
+    return loaded(cudaq_pulse::loader::callables(ctx_.get(), module.ptr()));
+  }
+  nb::object load_link_names(nb::handle module) {
+    return loaded(cudaq_pulse::loader::linkNames(ctx_.get(), module.ptr()));
+  }
+  nb::object load_submissions(nb::handle module) {
+    return loaded(cudaq_pulse::loader::submissions(ctx_.get(), module.ptr()));
+  }
+  PulseModule load_function(nb::handle module, nb::handle entry,
+                            double clock_ghz, int64_t qudits,
+                            nb::handle latencies, nb::handle keys,
+                            nb::handle devices) {
+    Py_ssize_t size =
+        PyBytes_Check(module.ptr()) ? PyBytes_Size(module.ptr()) : 0;
+    SharedContextPool::charge(ctx_.get(), static_cast<int64_t>(size / 8));
+    return PulseModule(ctx_,
+                       cudaq_pulse::loader::function(
+                           ctx_.get(), module.ptr(), entry.ptr(), clock_ghz,
+                           qudits, latencies.ptr(), keys.ptr(), devices.ptr()));
   }
 
 private:
@@ -7930,6 +8428,11 @@ NB_MODULE(_cudaq_pulse_native, m) {
       .def("event_tree", &PulseModule::event_tree, nb::arg("limit"),
            "events(), or past `limit` events the ops once each with the "
            "loops they repeat in")
+      .def("strip_sites", &PulseModule::strip_sites,
+           "Remove the site numbers the packed site records gave")
+      .def("site_tree", &PulseModule::site_tree,
+           "The lines and the scheduled ops with their numbers, times and "
+           "the loops and branches they lie in")
       .def("controller_dependencies", &PulseModule::controller_dependencies,
            "For each event of controller_program(), not rolled: the "
            "arguments its tone frequency, frame phase and waveform depend on")
@@ -7953,6 +8456,7 @@ NB_MODULE(_cudaq_pulse_native, m) {
            nb::arg("slots").none() = nb::none(),
            nb::arg("repeats").none() = nb::none(),
            nb::arg("periods").none() = nb::none(),
+           nb::arg("segments").none() = nb::none(),
            "The lines and events of the export for a controller, as "
            "controller.export() gives them; a list `slots` gets each line's "
            "runtime-qudit slot")
@@ -8151,7 +8655,23 @@ NB_MODULE(_cudaq_pulse_native, m) {
           },
           "Read a PulseModule from what PulseModule.serialize returned",
           nb::arg("module"), nb::arg("source"), nb::arg("run_time"),
-          nb::arg("rewrites"));
+          nb::arg("rewrites"))
+      .def("load_link_names", &PulseModuleBuilder::load_link_names,
+           "The names a module (assembly or bytecode) gives its links, by id",
+           nb::arg("module"))
+      .def("load_submissions", &PulseModuleBuilder::load_submissions,
+           "Every submission of a module (assembly or bytecode): its function, "
+           "the cycles its schedule gives it and the cycles its link takes",
+           nb::arg("module"))
+      .def("load_callables", &PulseModuleBuilder::load_callables,
+           "The classical functions a module (assembly or bytecode) declares",
+           nb::arg("module"))
+      .def("load_function", &PulseModuleBuilder::load_function,
+           "The scheduled function `entry` of a module (assembly or bytecode) "
+           "as a module whose main takes the function's qudits as slots",
+           nb::arg("module"), nb::arg("entry"), nb::arg("clock_ghz"),
+           nb::arg("qudits"), nb::arg("latencies"), nb::arg("keys"),
+           nb::arg("devices"));
 
   m.def(
       "build_stamp", [] { return std::string(cudaqPulseBuildStamp); },
@@ -8169,6 +8689,45 @@ NB_MODULE(_cudaq_pulse_native, m) {
   m.def("shared_context_stats", &SharedContextPool::stats,
         "(contexts created, builders on the current context, its packed "
         "words)");
+  m.def(
+      "_canonical_pattern_audit",
+      [](std::vector<std::string> held) {
+        // Every dialect of the registry loaded, so that every pattern a
+        // module can meet is in the set.
+        mlir::MLIRContext context(makeRegistry());
+        context.loadAllAvailableDialects();
+        mlir::RewritePatternSet all = allCanonicalPatterns(&context);
+        llvm::StringSet<> keys;
+        for (const std::unique_ptr<mlir::RewritePattern> &pattern :
+             all.getNativePatterns())
+          keys.insert(patternKey(*pattern));
+        std::vector<std::string> unused;
+        for (const auto &entry : undeclaredMakes())
+          if (!keys.contains(entry.getKey()))
+            unused.push_back(entry.getKey().str());
+        std::sort(unused.begin(), unused.end());
+        nb::dict audit;
+        audit["patterns"] = all.getNativePatterns().size();
+        audit["unlisted"] = unlistedPatterns(all);
+        audit["unused_entries"] = unused;
+        llvm::StringSet<> names;
+        for (const std::string &name : held)
+          names.insert(name);
+        mlir::RewritePatternSet reached =
+            reachablePatterns(&context, std::move(all), names);
+        std::vector<std::string> kept;
+        for (const std::unique_ptr<mlir::RewritePattern> &pattern :
+             reached.getNativePatterns())
+          kept.push_back(patternKey(*pattern));
+        audit["kept"] = kept;
+        return audit;
+      },
+      nb::arg("held") = std::vector<std::string>(),
+      "For tests: the canonicalization patterns of every dialect (count), "
+      "those that declare no ops they make and are not listed in "
+      "bindings.cpp's undeclaredMakes() (unlisted), the entries there that "
+      "match no pattern (unused_entries), and how many patterns a module "
+      "holding the ops `held` keeps (kept, as root|name).");
   m.def("verifies_everything", &verifyEverything,
         "Whether CUDAQ_PULSE_VERIFY=1 asks for the verifications that only "
         "catch a bug of the compiler itself");

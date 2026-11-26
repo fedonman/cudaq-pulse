@@ -6,11 +6,13 @@
 
 #pragma once
 
+#include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassRegistry.h"
 
 #include <cstdint>
+#include <exception>
 #include <memory>
 #include <string>
 
@@ -74,6 +76,35 @@ std::unique_ptr<mlir::Pass> createPulseScheduleRcpPass(int64_t maxDrives,
 /// cudaq-pulse-opt; the extension creates the pass above.
 std::unique_ptr<mlir::Pass> createPulseScheduleRcpOptionsPass();
 std::unique_ptr<mlir::Pass> createPulseInlineScheduleBlocksPass();
+std::unique_ptr<mlir::Pass> createPulseExpandCallsPass();
+/// Write out every placed pulse.call of `module`, callees first: a copy of
+/// the callee's ops at the call's start and periods, and a wait on each line
+/// the callee plays on where the call lasts longer than it. Callees no call
+/// runs any more are erased. With `callSites`, each copied op's
+/// location names the call (for pulse-verify's diagnostics).
+mlir::LogicalResult expandCalls(mlir::ModuleOp module, bool callSites);
+
+/// pulse-verify's check of a module with placed pulse.call ops: each callee
+/// keeps the rules for one, no call runs back into itself, and the program
+/// with its calls written out passes every check.
+mlir::LogicalResult checkCalls(mlir::ModuleOp module);
+
+/// For a `module` that lists its controllers' longest programs (its
+/// pulse.program_limits, from Controller.max_program_duration): fails if a
+/// scheduled function of it can last longer than one of them with its
+/// waits of run-time length at their highest, or has such a wait with no
+/// highest length where it holds back a line of such a controller
+/// (PulseProgramLimits.cpp). The program as scheduled is the schedule
+/// passes' to check.
+mlir::LogicalResult checkWaitLimits(mlir::ModuleOp module);
+/// For the handler of a schedule that failed with a call's values, `error`:
+/// where the schedule's check said the program then lasts longer than a
+/// controller's longest program, throws that sentence as an error of the
+/// values (std::invalid_argument); else throws `error` again (the
+/// extension's ProgramLimitError.cpp).
+[[noreturn]] void rethrowPastProgramLimit(const std::exception &error);
+/// Whether `module` holds a pulse.call.
+bool moduleHasCalls(mlir::ModuleOp module);
 std::unique_ptr<mlir::Pass>
 createPulseClassicalCheckPass(int64_t readoutLatency);
 /// pulse-classical-check with its options, for cudaq-pulse-opt; the
@@ -118,6 +149,7 @@ inline void registerPulsePasses() {
   mlir::registerPass(createPulseScheduleAsapOptionsPass);
   mlir::registerPass(createPulseScheduleAlapOptionsPass);
   mlir::registerPass(createPulseInlineScheduleBlocksPass);
+  mlir::registerPass(createPulseExpandCallsPass);
   mlir::registerPass(createPulseClassicalCheckOptionsPass);
   mlir::registerPass(createPulseFrameChangesPass);
   mlir::registerPass(createPulseUnrollClassicalLoopsPass);

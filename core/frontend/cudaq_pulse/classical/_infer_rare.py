@@ -39,7 +39,7 @@ from ._infer import (
 # ── Instructions ────────────────────────────────────────────────────────────
 
 
-def raw(self: _Run, st: _State, name: str, arg: int, dec: Any, i: int, throw: Any) -> _State | None:
+def raw(self: _Run, st: _State, name: str, arg: int, dec: Any, i: int) -> _State | None:
     """An instruction the kernel tracer doesn't run, by its raw opname."""
     stack = st.stack
     line = _line(dec, i)
@@ -220,7 +220,7 @@ def _show(p: Any) -> str:
             return say(p)
         try:
             return _text(p)
-        except Exception:  # noqa: BLE001 - wording falls back, never fails the error
+        except Exception:  # wording falls back, never fails the error
             return "..."
     return str(p)
 

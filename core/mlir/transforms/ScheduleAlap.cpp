@@ -52,6 +52,7 @@
 #include "llvm/ADT/SmallBitVector.h"
 
 #include <algorithm>
+#include <cstdlib>
 #include <functional>
 #include <limits>
 #include <memory>
@@ -83,6 +84,12 @@
 #include "cudaq-pulse/Analysis/Untimed.h"
 
 #include <map>
+
+namespace pulse {
+/// Refuses each pulse.call of `function`: the schedule passes do not place
+/// one yet (PulseCallCheck.cpp).
+mlir::LogicalResult refuseCalls(mlir::func::FuncOp function);
+} // namespace pulse
 
 namespace {
 
@@ -293,18 +300,24 @@ static void conditionMeasurements(mlir::Value value,
                                   llvm::SmallVectorImpl<mlir::Value> &found,
                                   llvm::DenseSet<mlir::Value> &seen,
                                   bool throughAnswers) {
-  if (mlir::isa<classical::LinkType>(value.getType()) ||
-      !seen.insert(value).second)
-    return;
-  if (mlir::isa<pulse::MeasurementType>(value.getType())) {
-    found.push_back(value);
-    return;
+  // The values still to follow, the next one last: an operation's operands
+  // in their order, each with all it is computed from before the next.
+  llvm::SmallVector<mlir::Value, 16> todo{value};
+  while (!todo.empty()) {
+    mlir::Value next = todo.pop_back_val();
+    if (mlir::isa<classical::LinkType>(next.getType()) ||
+        !seen.insert(next).second)
+      continue;
+    if (mlir::isa<pulse::MeasurementType>(next.getType())) {
+      found.push_back(next);
+      continue;
+    }
+    mlir::Operation *def = next.getDefiningOp();
+    if (!def || (!throughAnswers && mlir::isa<classical::WaitOp>(def)))
+      continue;
+    for (mlir::Value operand : llvm::reverse(def->getOperands()))
+      todo.push_back(operand);
   }
-  mlir::Operation *def = value.getDefiningOp();
-  if (!def || (!throughAnswers && mlir::isa<classical::WaitOp>(def)))
-    return;
-  for (mlir::Value operand : def->getOperands())
-    conditionMeasurements(operand, found, seen, throughAnswers);
 }
 
 static llvm::SmallVector<mlir::Value>
@@ -730,33 +743,43 @@ struct LoopGroups {
 static void conditionWaits(mlir::Value value,
                            llvm::SmallVectorImpl<mlir::Operation *> &found,
                            llvm::DenseSet<mlir::Value> &seen) {
-  if (!seen.insert(value).second)
-    return;
-  mlir::Operation *def = value.getDefiningOp();
-  if (!def)
-    return;
-  if (mlir::isa<classical::WaitOp>(def)) {
-    found.push_back(def);
-    return;
+  // As conditionMeasurements follows: the next value last.
+  llvm::SmallVector<mlir::Value, 16> todo{value};
+  while (!todo.empty()) {
+    mlir::Value next = todo.pop_back_val();
+    if (!seen.insert(next).second)
+      continue;
+    mlir::Operation *def = next.getDefiningOp();
+    if (!def)
+      continue;
+    if (mlir::isa<classical::WaitOp>(def)) {
+      found.push_back(def);
+      continue;
+    }
+    for (mlir::Value operand : llvm::reverse(def->getOperands()))
+      todo.push_back(operand);
   }
-  for (mlir::Value operand : def->getOperands())
-    conditionWaits(operand, found, seen);
 }
 
 /// Whether `value` is computed from a measurement other than through the
 /// answer of a call.
 static bool readsMeasurement(mlir::Value value,
                              llvm::DenseSet<mlir::Value> &seen) {
-  if (!seen.insert(value).second)
-    return false;
-  if (mlir::isa<pulse::MeasurementType>(value.getType()))
-    return true;
-  mlir::Operation *def = value.getDefiningOp();
-  if (!def || mlir::isa<classical::WaitOp>(def))
-    return false;
-  return llvm::any_of(def->getOperands(), [&](mlir::Value operand) {
-    return readsMeasurement(operand, seen);
-  });
+  // As conditionMeasurements follows, up to the first measurement.
+  llvm::SmallVector<mlir::Value, 16> todo{value};
+  while (!todo.empty()) {
+    mlir::Value next = todo.pop_back_val();
+    if (!seen.insert(next).second)
+      continue;
+    if (mlir::isa<pulse::MeasurementType>(next.getType()))
+      return true;
+    mlir::Operation *def = next.getDefiningOp();
+    if (!def || mlir::isa<classical::WaitOp>(def))
+      continue;
+    for (mlir::Value operand : llvm::reverse(def->getOperands()))
+      todo.push_back(operand);
+  }
+  return false;
 }
 
 /// The groups of `loop`'s carried values, or none when their independence
@@ -1233,6 +1256,15 @@ public:
             forwardStarts[op][sample.iteration] = sample.start;
       forwardExtrapolations = extrapolations;
     }
+    // The backward pass ends no operation after the forward schedule's last
+    // operation (lastEnd): the makespan may end later, at a readout line's
+    // hold (for the next operation on the line, of which there is none) or
+    // at a sync's instant (it plays nothing). A region that is a schedule
+    // block's body or holds a block keeps the makespan: a block's shape is
+    // as it was.
+    lastEnd = kNever;
+    if (tailNoted && !uncapped && tailMayPassOps())
+      noteLastEnd();
     samples.clear();
     extrapolations.clear();
     covers.clear();
@@ -1240,7 +1272,139 @@ public:
     return backwardBlock(region->front());
   }
 
+  /// Whether a hold or a sync may end after the forward schedule's last
+  /// operation. Where every iteration was simulated (no loop extrapolated,
+  /// none skipped) and none ends after the operations' ends, the makespan is
+  /// the last end, and the backward pass is the same without it.
+  bool tailMayPassOps() const {
+    return !extrapolations.empty() || !covers.empty() || tailsEnd > opsEnd;
+  }
+
+  /// Set the last end (see backward) from the forward schedule, outside a
+  /// region that is a schedule block's body or holds one.
+  LLVM_ATTRIBUTE_NOINLINE void noteLastEnd() {
+    if (blocksAround())
+      return;
+    for (auto &[op, list] : samples)
+      for (const Sample &sample : list)
+        forwardStarts[op][sample.iteration] = sample.start;
+    forwardExtrapolations = extrapolations;
+    lastEnd = writtenLastEnd() - testShrinkLastEnd();
+  }
+
+  /// Test only: CUDAQ_PULSE_TEST_SHRINK_LAST_END moves the last end that
+  /// many cycles early, to show a backward schedule that breaks it
+  /// scheduled again without it. Anything but a non-negative integer is
+  /// ignored.
+  static int64_t testShrinkLastEnd() {
+    int64_t cycles = 0;
+    if (const char *shrink = std::getenv("CUDAQ_PULSE_TEST_SHRINK_LAST_END"))
+      if (llvm::StringRef(shrink).getAsInteger(10, cycles) || cycles < 0)
+        cycles = 0;
+    return cycles;
+  }
+
+  /// The end of the last operation of the forward schedule as it is
+  /// written: of each timed op, its last iteration (forwardStartAt). The
+  /// makespan where a loop has no constant trip count.
+  int64_t writtenLastEnd() const {
+    int64_t latest = 0;
+    for (auto &[op, list] : samples) {
+      if (!isTimedOp(op) || list.empty())
+        continue;
+      auto loops = pulse::enclosingLoops(op, region->getParentOp());
+      llvm::SmallVector<int64_t, 2> last;
+      for (mlir::scf::ForOp loop : loops) {
+        std::optional<int64_t> trips = pulse::constantTripCount(loop);
+        if (!trips)
+          return makespan;
+        last.push_back(*trips - 1);
+      }
+      int64_t end = forwardStartAt(op, last, loops) + durationOf(op);
+      for (const Sample &sample : list)
+        end = std::max(end, sample.start + durationOf(op));
+      latest = std::max(latest, end);
+    }
+    return std::min(latest, makespan);
+  }
+
+  /// Whether the region is a schedule block's body or holds a block.
+  bool blocksAround() const {
+    return mlir::isa_and_nonnull<pulse::ScheduleBlockOp>(
+               region->getParentOp()) ||
+           region
+               ->walk([](pulse::ScheduleBlockOp) {
+                 return mlir::WalkResult::interrupt();
+               })
+               .wasInterrupted();
+  }
+
   int64_t makespan = 0;
+  /// Where the backward pass ends its last operation (see backward).
+  int64_t lastEnd = kNever;
+  /// Whether the forward pass noted a readout line's hold or a sync, either
+  /// of which may end after the last operation.
+  bool tailNoted = false;
+  /// The latest end the forward pass gave an operation, and the latest
+  /// hold or sync it noted (see tailMayPassOps).
+  int64_t opsEnd = 0, tailsEnd = 0;
+  /// Schedule without the last end, as before it (see cappedHolds).
+  bool uncapped = false;
+
+  /// Whether the round under the last end can be written (as
+  /// scheduleRounds checks every round) and keeps to it (cappedHolds).
+  LLVM_ATTRIBUTE_NOINLINE bool keepsLastEnd() {
+    bool written = !skippedNegative && !answeredEarly &&
+                   !(slotsOverrun && heldTooMany()) &&
+                   llvm::all_of(samples, [](const auto &entry) {
+                     return llvm::all_of(entry.second, [](const Sample &s) {
+                       return s.start >= 0;
+                     });
+                   });
+    return written && cappedHolds();
+  }
+
+  /// Whether the backward schedule keeps to the last end: every op, pulse,
+  /// wait or call, ends by it and, with lanes, starts no earlier than its
+  /// forward start (lanes the capped ops took could push one there, into a
+  /// call it waits out on a controller that blocks on calls). Where it does
+  /// not, or the round cannot be written, scheduleRounds schedules the round
+  /// again without the last end, as before it.
+  bool cappedHolds() const {
+    if (lastEnd == kNever)
+      return true;
+    for (auto &[op, list] : samples) {
+      if (!isTimedOp(op))
+        continue;
+      auto loops = pulse::enclosingLoops(op, region->getParentOp());
+      for (const Sample &sample : list) {
+        if (sample.start + durationOf(op) > lastEnd)
+          return false;
+        if (resources.enabled &&
+            sample.start < forwardStartAt(op, sample.iteration, loops))
+          return false;
+      }
+    }
+    return true;
+  }
+
+  /// `end`, the latest end of `op` in the current iteration, capped at the
+  /// last end. An op whose forward end is after the last end (only under
+  /// the test hook) keeps `end`, and cappedHolds then fails the round.
+  int64_t capAtLastEnd(mlir::Operation *op, int64_t end) {
+    if (end <= lastEnd)
+      return end;
+    return capPastLastEnd(op, end);
+  }
+
+  LLVM_ATTRIBUTE_NOINLINE int64_t capPastLastEnd(mlir::Operation *op,
+                                                 int64_t end) {
+    auto loops = pulse::enclosingLoops(op, region->getParentOp());
+    if (forwardStartAt(op, iteration, loops) + durationOf(op) > lastEnd)
+      return end;
+    return lastEnd;
+  }
+
   llvm::DenseMap<mlir::Operation *, llvm::SmallVector<Sample, 1>> samples;
   llvm::SmallVector<Extrapolation> extrapolations;
   /// The iterations a LaneCycle skipped (see Cover).
@@ -1967,29 +2131,36 @@ private:
   static void valueMeasurements(mlir::Value value,
                                 llvm::SmallVectorImpl<mlir::Value> &found,
                                 llvm::DenseSet<mlir::Value> &seen) {
-    if (!seen.insert(value).second)
-      return;
-    if (mlir::isa<pulse::MeasurementType>(value.getType())) {
-      found.push_back(value);
-      return;
+    // The values still to follow, the next one last: what a value is
+    // computed from in order (a branch's condition, then what each arm
+    // yields; an operation's operands), each to its end before the next.
+    llvm::SmallVector<mlir::Value, 16> todo{value};
+    while (!todo.empty()) {
+      mlir::Value next = todo.pop_back_val();
+      if (!seen.insert(next).second)
+        continue;
+      if (mlir::isa<pulse::MeasurementType>(next.getType())) {
+        found.push_back(next);
+        continue;
+      }
+      if (isTimedType(next.getType()))
+        continue;
+      mlir::Operation *def = next.getDefiningOp();
+      if (!def || mlir::isa<classical::WaitOp>(def))
+        continue;
+      if (auto branch = mlir::dyn_cast<mlir::scf::IfOp>(def)) {
+        auto index = mlir::cast<mlir::OpResult>(next).getResultNumber();
+        if (!branch.getElseRegion().empty())
+          todo.push_back(branch.elseYield().getOperand(index));
+        todo.push_back(branch.thenYield().getOperand(index));
+        todo.push_back(branch.getCondition());
+        continue;
+      }
+      if (def->getNumRegions())
+        continue;
+      for (mlir::Value operand : llvm::reverse(def->getOperands()))
+        todo.push_back(operand);
     }
-    if (isTimedType(value.getType()))
-      return;
-    mlir::Operation *def = value.getDefiningOp();
-    if (!def || mlir::isa<classical::WaitOp>(def))
-      return;
-    if (auto branch = mlir::dyn_cast<mlir::scf::IfOp>(def)) {
-      valueMeasurements(branch.getCondition(), found, seen);
-      auto index = mlir::cast<mlir::OpResult>(value).getResultNumber();
-      valueMeasurements(branch.thenYield().getOperand(index), found, seen);
-      if (!branch.getElseRegion().empty())
-        valueMeasurements(branch.elseYield().getOperand(index), found, seen);
-      return;
-    }
-    if (def->getNumRegions())
-      return;
-    for (mlir::Value operand : def->getOperands())
-      valueMeasurements(operand, found, seen);
   }
 
   /// The measurements the operands of timed op `op` other than its line and
@@ -3724,6 +3895,7 @@ private:
       floors[t] = std::max(floors[t], start + duration + budget);
     for (int64_t c : held)
       heldFloors[c] = std::max(heldFloors[c], start + duration + budget);
+    opsEnd = std::max(opsEnd, start + duration);
     noteEnd(start + duration, t);
   }
 
@@ -3740,6 +3912,7 @@ private:
       readyAt[value] = start;
     if (wait->hasAttr("classical.blocking"))
       floors[t] = std::max(floors[t], start);
+    opsEnd = std::max(opsEnd, start);
     noteEnd(start, t);
   }
 
@@ -3752,6 +3925,10 @@ private:
                                   : resources.readoutLatency;
       if (resources.enabled)
         lineEnd += latency;
+      if (lineEnd != end) {
+        tailNoted = true;
+        tailsEnd = std::max(tailsEnd, lineEnd);
+      }
       readyAt[readout.getResult()] = end + latency + readoutDelayOf(op);
     }
     readyAt[op->getResult(0)] = lineEnd;
@@ -3759,6 +3936,7 @@ private:
       readyAt[tone] = end;
     if (holding())
       noteHeldEnd(op, lineEnd);
+    opsEnd = std::max(opsEnd, end);
     noteEnd(lineEnd, t);
   }
 
@@ -3870,6 +4048,8 @@ private:
         time = pulse::LineGrid::roundUp(time, syncGrid(sync));
       for (mlir::Value result : sync.getResults())
         readyAt[result] = time;
+      tailNoted = true;
+      tailsEnd = std::max(tailsEnd, time);
       noteEnd(time, t);
       return mlir::success();
     }
@@ -4403,6 +4583,8 @@ private:
       int64_t needed = late(submit.getFuture());
       if (needed != kNever)
         end = std::min(end, needed - budget);
+      // A call ends by the last end, as a pulse does.
+      end = capAtLastEnd(op, end);
       start = end - duration;
     }
     start = takeSlotBackward(op, start, duration + budget, kept);
@@ -4437,6 +4619,8 @@ private:
       pinned.insert(wait);
     }
     start = std::min(start, ceilings[t]);
+    // An answer is taken by the last end, as a pulse ends by it.
+    start = capAtLastEnd(wait, start);
     // An eager request keeps its forward time, so where lanes or slots
     // handed out in reverse moved what its answer decides earlier, the
     // answer would be taken before it is due.
@@ -4507,6 +4691,7 @@ private:
       }
       if (mlir::Value tone = toneResult(op))
         end = std::min(end, late(tone));
+      end = capAtLastEnd(op, end);
       int64_t step = 1;
       if constexpr (Gridded)
         step = grid.of(op->getOperand(0), lines);
@@ -6419,16 +6604,19 @@ scheduleRounds(mlir::Region &region, mlir::Operation *root, Resources resources,
                const pulse::LineGrid &grid,
                const pulse::Controllers &controllers) {
   // Each round either writes an affine schedule, removes an iteration from
-  // a loop, or (a bounded number of times) regroups one, so this
-  // terminates.
+  // a loop, (a bounded number of times) regroups one, or schedules the same
+  // round once more without the alap last end, so this terminates.
   int64_t widePeels = 0, regroups = 0, headPeels = 0;
   llvm::DenseMap<mlir::Operation *, int64_t> regroupedBy;
+  // Schedule the next round without the alap last end (see below).
+  bool uncapped = false;
   while (true) {
     Scheduler<Gridded> scheduler(region, resources, classical, grid,
                                  controllers, &timelines);
     scheduler.mayRegroup = regroups < kRegroupRounds;
     scheduler.mayPeelHead = headPeels < kRegroupRounds;
     scheduler.regroupedBy = regroupedBy;
+    scheduler.uncapped = std::exchange(uncapped, false);
     auto regrouped = [&] {
       if (scheduler.headPeel) {
         ++headPeels;
@@ -6454,6 +6642,13 @@ scheduleRounds(mlir::Region &region, mlir::Operation *root, Resources resources,
         return mlir::failure();
       if (regrouped())
         continue;
+      // A round under the last end that cannot be written or does not keep
+      // to it is scheduled again without it, as before it; only where that
+      // cannot be written either does the forward schedule stand.
+      if (scheduler.lastEnd != kNever && !scheduler.keepsLastEnd()) {
+        uncapped = true;
+        continue;
+      }
       // Handing out resources in reverse program order can need time before
       // zero, take an answer before it is due, or leave a request kept at
       // its forward start no slot; the forward resource schedule is always
@@ -6584,6 +6779,9 @@ static mlir::LogicalResult schedule(mlir::func::FuncOp function,
   // A declaration has no body to schedule.
   if (function.isExternal())
     return mlir::success();
+  // Nor do the passes place a pulse.call yet.
+  if (mlir::failed(pulse::refuseCalls(function))) [[unlikely]]
+    return mlir::failure();
   // The passes time the ops of one block, in their order.
   if (!function.getBody().hasOneBlock())
     return function.emitError(

@@ -15,6 +15,7 @@
 #include "mlir/IR/Matchers.h"
 
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallVector.h"
 
 #include <algorithm>
@@ -152,22 +153,40 @@ inline std::optional<double> boundAnswer(mlir::Value value) {
   return answers[result.getResultNumber()];
 }
 
+/// The numbers one evaluation has found for the values that have several
+/// uses, so that a term others share is computed once however many reach it.
+using ComputedNumbers =
+    llvm::SmallDenseMap<mlir::Value, std::optional<double>, 8>;
+
 template <typename Leaf>
-std::optional<double> computedTerm(mlir::Value value, Leaf &leaf);
+std::optional<double> computedTerm(mlir::Value value, Leaf &leaf,
+                                   std::optional<ComputedNumbers> &shared);
+template <typename Leaf>
+std::optional<double>
+computedArithmetic(mlir::Operation *def, Leaf &leaf,
+                   std::optional<ComputedNumbers> &shared);
+
+template <typename Leaf>
+std::optional<double> computedNumber(mlir::Value value, Leaf &leaf,
+                                     std::optional<ComputedNumbers> &shared) {
+  std::optional<double> out = computedTerm(value, leaf, shared);
+  if (out && value.getType().isInteger(1))
+    out = *out != 0.0 ? 1.0 : 0.0;
+  return out;
+}
 
 /// A number computed from constants and the values `leaf` gives (else
 /// none), by the terms of the controller export's expression vocabulary
 /// and the bool logic it expresses with them. A bool is 1 or 0.
 template <typename Leaf>
 std::optional<double> computedNumber(mlir::Value value, Leaf &leaf) {
-  std::optional<double> out = computedTerm(value, leaf);
-  if (out && value.getType().isInteger(1))
-    out = *out != 0.0 ? 1.0 : 0.0;
-  return out;
+  std::optional<ComputedNumbers> shared;
+  return computedNumber(value, leaf, shared);
 }
 
 template <typename Leaf>
-std::optional<double> computedTerm(mlir::Value value, Leaf &leaf) {
+std::optional<double> computedTerm(mlir::Value value, Leaf &leaf,
+                                   std::optional<ComputedNumbers> &shared) {
   if (mlir::Attribute attribute = constantAttribute(value)) {
     if (auto number = mlir::dyn_cast<mlir::FloatAttr>(attribute))
       return number.getValueAsDouble();
@@ -180,17 +199,41 @@ std::optional<double> computedTerm(mlir::Value value, Leaf &leaf) {
   mlir::Operation *def = value.getDefiningOp();
   if (!def || def->getNumRegions() != 0)
     return std::nullopt;
+  // Only arithmetic computes a number from its operands. Those of any other
+  // op are not followed: a classical call's answer that is not bound yet
+  // leads to the call, and that to the calls before it by its link and by
+  // its arguments both.
+  mlir::Dialect *dialect = def->getDialect();
+  if (!dialect || !mlir::isa<mlir::arith::ArithDialect>(*dialect))
+    return std::nullopt;
+  // A value of one use is reached once.
+  if (value.hasOneUse())
+    return computedArithmetic(def, leaf, shared);
+  if (!shared)
+    shared.emplace();
+  else if (auto found = shared->find(value); found != shared->end())
+    return found->second;
+  std::optional<double> out = computedArithmetic(def, leaf, shared);
+  shared->try_emplace(value, out);
+  return out;
+}
+
+/// computedTerm for the result of `def`, an op of arith without regions.
+template <typename Leaf>
+std::optional<double>
+computedArithmetic(mlir::Operation *def, Leaf &leaf,
+                   std::optional<ComputedNumbers> &shared) {
   llvm::StringRef name = def->getName().getStringRef();
   if (auto select = mlir::dyn_cast<mlir::arith::SelectOp>(def)) {
-    auto condition = computedNumber(select.getCondition(), leaf);
+    auto condition = computedNumber(select.getCondition(), leaf, shared);
     if (!condition)
       return std::nullopt;
     return computedNumber(*condition != 0.0 ? select.getTrueValue()
                                             : select.getFalseValue(),
-                          leaf);
+                          leaf, shared);
   }
   if (def->getNumOperands() == 1) {
-    auto x = computedNumber(def->getOperand(0), leaf);
+    auto x = computedNumber(def->getOperand(0), leaf, shared);
     if (!x)
       return std::nullopt;
     if (name == "arith.negf")
@@ -207,8 +250,8 @@ std::optional<double> computedTerm(mlir::Value value, Leaf &leaf) {
   }
   if (def->getNumOperands() != 2)
     return std::nullopt;
-  auto a = computedNumber(def->getOperand(0), leaf),
-       b = computedNumber(def->getOperand(1), leaf);
+  auto a = computedNumber(def->getOperand(0), leaf, shared),
+       b = computedNumber(def->getOperand(1), leaf, shared);
   if (!a || !b)
     return std::nullopt;
   if (name == "arith.xori")
@@ -303,9 +346,11 @@ inline std::optional<double> boundNumber(mlir::Value value) {
   return computedNumber(value, bound);
 }
 
-/// `value` as an affine function of the entry function's arguments, if it
-/// is a constant, an argument, or arithmetic on them that stays affine.
-inline std::optional<Affine> affineNumber(mlir::Value value) {
+/// affineNumber() of a value that is not arithmetic on others, and in `op`
+/// the float arithmetic to follow to its operands when it is (else null).
+inline std::optional<Affine> affineLeaf(mlir::Value value,
+                                        mlir::Operation *&op) {
+  op = nullptr;
   if (mlir::Attribute attribute = constantAttribute(value)) {
     if (auto number = mlir::dyn_cast<mlir::FloatAttr>(attribute))
       return Affine(number.getValueAsDouble());
@@ -323,31 +368,82 @@ inline std::optional<Affine> affineNumber(mlir::Value value) {
       return Affine::argument(argument.getArgNumber());
     return std::nullopt;
   }
-  mlir::Operation *op = value.getDefiningOp();
+  mlir::Operation *def = value.getDefiningOp();
+  if (def &&
+      mlir::isa<mlir::arith::NegFOp, mlir::arith::AddFOp, mlir::arith::SubFOp,
+                mlir::arith::MulFOp, mlir::arith::DivFOp>(def))
+    op = def;
+  return std::nullopt;
+}
+
+/// The affine functions found for the values that are arithmetic on others.
+using AffineNumbers =
+    llvm::SmallDenseMap<mlir::Value, std::optional<Affine>, 4>;
+
+/// `value` as an affine function of the entry function's arguments, if it
+/// is a constant, an argument, or arithmetic on them that stays affine.
+/// Each operation is computed once, in `numbers`, however many use it and
+/// however deep it is.
+inline std::optional<Affine> affineNumber(mlir::Value value,
+                                          AffineNumbers &numbers) {
+  mlir::Operation *op;
+  std::optional<Affine> leaf = affineLeaf(value, op);
   if (!op)
-    return std::nullopt;
-  auto operand = [&](unsigned index) {
-    return affineNumber(op->getOperand(index));
-  };
-  if (mlir::isa<mlir::arith::NegFOp>(op)) {
-    auto x = operand(0);
-    return x ? std::optional(-*x) : std::nullopt;
+    return leaf;
+  if (auto found = numbers.find(value); found != numbers.end())
+    return found->second;
+  llvm::SmallVector<mlir::Operation *, 16> todo{op};
+  while (!todo.empty()) {
+    op = todo.back();
+    if (numbers.count(op->getResult(0))) {
+      todo.pop_back();
+      continue;
+    }
+    std::optional<Affine> of[2];
+    bool ready = true;
+    unsigned operands = mlir::isa<mlir::arith::NegFOp>(op) ? 1 : 2;
+    for (unsigned i = 0; i < operands; ++i) {
+      mlir::Operation *inner;
+      of[i] = affineLeaf(op->getOperand(i), inner);
+      if (!inner)
+        continue;
+      if (auto found = numbers.find(op->getOperand(i));
+          found != numbers.end()) {
+        of[i] = found->second;
+      } else {
+        todo.push_back(inner);
+        ready = false;
+      }
+    }
+    if (!ready)
+      continue;
+    todo.pop_back();
+    std::optional<Affine> out;
+    if (operands == 1) {
+      if (of[0])
+        out = -*of[0];
+    } else if (of[0] && of[1]) {
+      if (mlir::isa<mlir::arith::AddFOp>(op))
+        out = *of[0] + *of[1];
+      else if (mlir::isa<mlir::arith::SubFOp>(op))
+        out = *of[0] - *of[1];
+      else if (mlir::isa<mlir::arith::MulFOp>(op))
+        out = of[0]->times(*of[1]);
+      else if (of[1]->isConstant())
+        out = *of[0] / of[1]->constant;
+    }
+    numbers[op->getResult(0)] = std::move(out);
   }
-  if (!mlir::isa<mlir::arith::AddFOp, mlir::arith::SubFOp, mlir::arith::MulFOp,
-                 mlir::arith::DivFOp>(op))
-    return std::nullopt;
-  auto lhs = operand(0), rhs = operand(1);
-  if (!lhs || !rhs)
-    return std::nullopt;
-  if (mlir::isa<mlir::arith::AddFOp>(op))
-    return *lhs + *rhs;
-  if (mlir::isa<mlir::arith::SubFOp>(op))
-    return *lhs - *rhs;
-  if (mlir::isa<mlir::arith::MulFOp>(op))
-    return lhs->times(*rhs);
-  if (!rhs->isConstant())
-    return std::nullopt;
-  return *lhs / rhs->constant;
+  return numbers.find(value)->second;
+}
+
+inline std::optional<Affine> affineNumber(mlir::Value value) {
+  mlir::Operation *op;
+  std::optional<Affine> leaf = affineLeaf(value, op);
+  if (!op)
+    return leaf;
+  AffineNumbers numbers;
+  return affineNumber(value, numbers);
 }
 
 } // namespace pulse

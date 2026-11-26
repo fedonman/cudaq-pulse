@@ -66,8 +66,8 @@ def _immutable(value: Any) -> bool:
     return False
 
 
+# A copy to compare a mutable container's contents against, or None.
 def _snapshot(value: Any) -> Any | None:
-    """A copy to compare a mutable container's contents against, or None."""
     if isinstance(value, _SNAPSHOT):
         try:
             return copy.deepcopy(value)
@@ -78,9 +78,9 @@ def _snapshot(value: Any) -> Any | None:
     return None
 
 
+# A copy of a dict item to compare its contents against, or None when
+# a copy does not compare equal to it (an object without ``__eq__``).
 def _item_snapshot(value: Any) -> Any | None:
-    """A copy of a dict item to compare its contents against, or None when
-    a copy does not compare equal to it (an object without ``__eq__``)."""
     snap = _snapshot(value)
     if snap is not None:
         return snap
@@ -200,23 +200,22 @@ _SAME_OBJECT, _EQUAL_VALUE, _EQUAL_METHOD = 0, 1, 2
 UPGRADE_AFTER = 2
 
 
+# The guard's check as closures: runs *plan*, true while no step fails.
+#
+# A step is ``(None, keys, names, -1, 0, globals, None)``, failing when a
+# name is bound in *globals* (whose ``keys()`` these are), or ``(source, a,
+# b, register, how, expected, snapshot)``: it reads a value (``a[b]``,
+# ``a[b]`` else the builtin ``b``, ``a.cell_contents``, or the attribute or
+# item ``b`` of the value in register ``a``), compares it with *expected*
+# (and its contents with *snapshot*) and keeps it in *register* (``-1``: no
+# later step reads it). Registers live in the call, so threads may check
+# one guard at once. With *upgrade*, the check counts its calls and, at
+# UPGRADE_AFTER, runs (and from then on is) the check *upgrade* returns.
 def _closures(
     plan: tuple[tuple[Any, ...], ...],
     registers: int,
     upgrade: Callable[[], Callable[[], bool]] | None = None,
 ) -> Callable[[], bool]:
-    """The guard's check as closures: runs *plan*, true while no step fails.
-
-    A step is ``(None, keys, names, -1, 0, globals, None)``, failing when a
-    name is bound in *globals* (whose ``keys()`` these are), or ``(source, a,
-    b, register, how, expected, snapshot)``: it reads a value (``a[b]``,
-    ``a[b]`` else the builtin ``b``, ``a.cell_contents``, or the attribute or
-    item ``b`` of the value in register ``a``), compares it with *expected*
-    (and its contents with *snapshot*) and keeps it in *register* (``-1``: no
-    later step reads it). Registers live in the call, so threads may check
-    one guard at once. With *upgrade*, the check counts its calls and, at
-    UPGRADE_AFTER, runs (and from then on is) the check *upgrade* returns.
-    """
     builtin = vars(builtins)
     same = _same_contents
     calls = 0
@@ -268,11 +267,11 @@ def _closures(
     return check
 
 
+# The generated form of *plan*: the same reads, in the same order, with
+# the same comparisons, as the source of ``_make`` and the values it takes.
+# The source holds only the plan's shape and names, so guards of one kernel
+# share it; each guard's values are its closure's.
 def _source(plan: tuple[tuple[Any, ...], ...]) -> tuple[str, list[Any]]:
-    """The generated form of *plan*: the same reads, in the same order, with
-    the same comparisons, as the source of ``_make`` and the values it takes.
-    The source holds only the plan's shape and names, so guards of one kernel
-    share it; each guard's values are its closure's."""
     names: list[str] = []
     values: list[Any] = []
 

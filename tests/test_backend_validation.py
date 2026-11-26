@@ -13,7 +13,7 @@ from typing import Any
 import cudaq_pulse as pulse
 import pytest
 from cudaq_pulse import Controller, ControlSystem, _validation, backends
-from cudaq_pulse.controller import _EVENT_KINDS, _FORMATS, unroll
+from cudaq_pulse.controller import _EVENT_KINDS, _FORMATS, ReadoutLine, unroll
 
 _PLUGINS = Path(__file__).resolve().parent / "plugins"
 _KNOWN = _EVENT_KINDS | {"drive", "readout", "submit"}
@@ -90,11 +90,13 @@ def test_a_conforming_backend_passes_in_every_format_it_reads(ideal):
     assert "PASS play (/1)" in lines and "PASS loop (/2)" in lines
     assert "PASS unsupported_event" in lines and "PASS newer_format" in lines
     assert "PASS shared_line (/1)" in lines and "PASS shared_line (/2)" in lines
+    for name in ("shared_drive_line_two_tones", "shared_drive_line_one_tone"):
+        assert f"PASS {name} (/1)" in lines and f"PASS {name} (/2)" in lines
     assert "PASS several_controllers[0] (/1)" in lines
     assert "PASS several_controllers[1] (/1)" in lines
     assert "PASS answer_timeout (/1)" in lines and "PASS answer_timeout (/2)" in lines
     assert "PASS timeout_function (/1)" in lines and "PASS timeout_function (/2)" in lines
-    assert lines[-1] == "backend 'toy': 32 passed"
+    assert lines[-1] == "backend 'toy': 36 passed"
 
 
 def test_programs_of_several_controllers_are_exported_in_format_1_only(ideal, monkeypatch):
@@ -103,6 +105,77 @@ def test_programs_of_several_controllers_are_exported_in_format_1_only(ideal, mo
     report = str(backends.validate(backend))
     assert "PASS shared_line" in report.splitlines()
     assert "several_controllers" not in report
+
+
+def test_the_shared_drive_line_program_drives_both_tones_of_one_line_at_once(ideal):
+    feedline = ReadoutLine([0, 1], max_concurrent_tones=2)
+    for readout_lines, kept in (((), [(0,), (1,)]), ([feedline], [(0, 1)])):
+        base = Controller(clock_ghz=1.0, readout_lines=readout_lines)
+        system = _validation._shared_drive_line(ControlSystem(controllers=[base]))
+        (controller,) = system.controllers
+        assert [(line.qudits, line.max_concurrent_tones) for line in controller.drive_lines] == [
+            ((0, 1), 2)
+        ]
+        # Its readout lines stay as the controller has them.
+        assert [line.qudits for line in controller.readout_lines] == kept
+        corpus = _validation._corpus()
+        assert corpus["shared_drive_line_two_tones"] is corpus["shared_drive_line_one_tone"]
+        # On the corpus's system the line's two tones differ in frequency;
+        # on the system whose qudits share one, they are one tone.
+        for spacing_hz, frequencies in ((1.5e8, [5.0e9, 5.15e9]), (0.0, [5.0e9, 5.0e9])):
+            dev = _validation._device(system, spacing_hz=spacing_hz)
+            kernel = corpus["shared_drive_line_one_tone"]
+            lowered = pulse.compile(kernel, quantum_system=dev, control_system=system).lower(
+                *dev.qudits[:2]
+            )
+            program = lowered.export_to_controller(version=2)
+            drives = [e for e in program["events"] if e["kind"] == "play"]
+            assert [(e["line"], e["tone_slot"], e["qudits"]) for e in drives] == [
+                (0, 0, [0]),
+                (0, 1, [1]),
+            ]
+            assert [e["tones"][0]["frequency_hz"] for e in drives] == frequencies
+            starts = {(e["start_cycles"], e["duration_cycles"], e["waveform"]) for e in drives}
+            assert len(starts) == 1
+        assert program["lines"][0]["max_concurrent_tones"] == 2
+        assert sum(e["kind"] == "readout" for e in program["events"]) == 2
+
+
+def test_a_backend_without_shared_drive_lines_refuses_that_program(ideal):
+    class Dedicated(ToyBackend):
+        def emit(self, program):
+            shared = [x for x in program["lines"] if x["role"] == "drive" and "qudits" in x]
+            if any(len(line["qudits"]) > 1 for line in shared):
+                raise backends.IncompatibleBackendError("one drive line per qudit")
+            return super().emit(program)
+
+    report = backends.validate(Dedicated())
+    lines = str(report).splitlines()
+    assert report.ok, str(report)
+    for name in ("shared_drive_line_two_tones", "shared_drive_line_one_tone"):
+        assert f"REFUSED {name} (/1): one drive line per qudit" in lines
+        assert f"REFUSED {name} (/2): one drive line per qudit" in lines
+    assert "PASS shared_line (/1)" in lines and lines[-1] == "backend 'toy': 32 passed, 4 refused"
+
+
+def test_a_backend_of_one_tone_per_line_emits_the_one_tone_program(ideal):
+    class OneTone(ToyBackend):
+        def emit(self, program):
+            shared = {x["line"] for x in program["lines"] if "max_concurrent_tones" in x}
+            played = {
+                e["tones"][0]["frequency_hz"]
+                for e in program["events"]
+                if e["kind"] == "play" and e["line"] in shared
+            }
+            if len(played) > 1:
+                raise backends.IncompatibleBackendError("one tone for every qudit of a line")
+            return super().emit(program)
+
+    backend = OneTone()
+    backend.formats = (_FORMATS[1],)
+    lines = str(backends.validate(backend)).splitlines()
+    assert "PASS shared_drive_line_one_tone" in lines
+    assert "REFUSED shared_drive_line_two_tones: one tone for every qudit of a line" in lines
 
 
 def test_each_controller_s_part_is_checked_on_its_own(ideal):

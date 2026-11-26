@@ -220,7 +220,7 @@ lines = str(report).splitlines()
 print(lines[-1])
 
 # Prints:
-#   backend 'toy': 27 passed, 2 skipped
+#   backend 'toy': 29 passed, 2 skipped
 
 
 for result in lines[:-1]:

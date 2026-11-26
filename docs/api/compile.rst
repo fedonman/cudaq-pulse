@@ -7,6 +7,8 @@ Compilation API
 
 .. autofunction:: cudaq_pulse.compile
 
+.. autofunction:: cudaq_pulse.load
+
 .. autoclass:: cudaq_pulse.CompiledKernel
    :members:
 
@@ -16,6 +18,18 @@ Compilation API
 .. autoclass:: cudaq_pulse.Pass
    :members:
    :undoc-members:
+
+.. autoclass:: cudaq_pulse.IdleReplacement
+
+.. autoclass:: cudaq_pulse.compiler.IdleWindow
+   :members:
+
+.. autoclass:: cudaq_pulse.compiler.IdleWindows
+
+.. autoclass:: cudaq_pulse.compiler.QuditExposure
+   :members:
+
+.. autoclass:: cudaq_pulse.compiler.Exposure
 
 .. autoclass:: cudaq_pulse.compiler.IRLevel
    :members:

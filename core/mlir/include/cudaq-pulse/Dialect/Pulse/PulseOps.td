@@ -11,6 +11,7 @@ include "cudaq-pulse/Dialect/Pulse/PulseTypes.td"
 include "cudaq-pulse/Dialect/Pulse/PulseTiming.td"
 include "mlir/Interfaces/SideEffectInterfaces.td"
 include "mlir/Interfaces/ControlFlowInterfaces.td"
+include "mlir/IR/SymbolInterfaces.td"
 include "mlir/IR/OpBase.td"
 
 class PulseOp<string mnemonic, list<Trait> traits = []> :
@@ -50,10 +51,29 @@ def GetDriveLineOp : PulseOp<"get_drive_line", [Pure]> {
   let description = [{
     Returns the drive line and native tone associated with a qudit.
     The returned drive line starts at time t=0.
+
+    A broadcast drive line reaches several qudits with one tone: the op
+    names all of them, lowest index first, and a drive on the line drives
+    every one. Its `frequency_hz` is the frequency of the line's tone.
+
+    ```mlir
+    %line, %tone = pulse.get_drive_line %q0, %q1 {frequency_hz = 5.0e+09 : f64}
+        : (!pulse.qudit, !pulse.qudit) -> (!pulse.drive_line, !pulse.tone)
+    ```
   }];
-  let arguments = (ins QuditType:$qudit);
+  let arguments = (ins QuditType:$qudit, Variadic<QuditType>:$others);
   let results = (outs DriveLineType:$line, ToneType:$tone);
-  let assemblyFormat = "$qudit attr-dict `:` functional-type(operands, results)";
+  let assemblyFormat = "$qudit (`,` $others^)? attr-dict `:` functional-type(operands, results)";
+  // The builder of a line of one qudit, as before the line could name more.
+  let builders = [
+    OpBuilder<(ins "::mlir::Type":$line, "::mlir::Type":$tone,
+                   "::mlir::Value":$qudit), [{
+      $_state.addOperands(qudit);
+      $_state.addTypes(line);
+      $_state.addTypes(tone);
+    }]>
+  ];
+  let hasVerifier = 1;
 }
 
 def GetReadoutLineOp : PulseOp<"get_readout_line", [Pure]> {
@@ -656,6 +676,44 @@ def ScheduleBlockOp : PulseOp<"schedule_block", [
     $body
   }];
   let hasRegionVerifier = 1;
+}
+
+def CallOp : PulseOp<"call", [
+    DeclareOpInterfaceMethods<SymbolUserOpInterface>]> {
+  let summary = "Run a function scheduled on its own, placed as one unit";
+  let description = [{
+    Runs `callee`, a function of the module with a schedule of its own, at
+    one start time: every timed op of the callee keeps its start relative to
+    the call's start, wherever and however often it is called.
+
+    Lines, tones and measurements cross as with `pulse.schedule_block`: each
+    timed operand is the callee's matching argument, and each result is what
+    the callee returns at that place. A line or tone that enters the call
+    continues as one of its results. Numbers (`f64`, `i64`) are the values at
+    the call.
+
+    The callee records its length in `pulse.length_cycles`. A placed call
+    lasts `duration_cycles`, at least that length. When it lasts longer,
+    every line the callee plays on is held until the call's end, so nothing
+    else plays on it before then.
+
+    ```mlir
+    func.func private @x90(%d: !pulse.drive_line, %t: !pulse.tone)
+        -> (!pulse.drive_line, !pulse.tone)
+        attributes {pulse.length_cycles = 40 : i64} { ... }
+
+    %d1, %t1 = pulse.call @x90(%d0, %t0) <{duration_cycles = 40 : i64, start_cycles = 8 : i64}>
+        : (!pulse.drive_line, !pulse.tone) -> (!pulse.drive_line, !pulse.tone)
+    ```
+  }];
+  let arguments = !con((ins FlatSymbolRefAttr:$callee,
+                            Variadic<AnyType>:$args),
+                       PulseTimingArgs);
+  let results = (outs Variadic<AnyTimedType>:$results);
+  let assemblyFormat = [{
+    $callee `(` $args `)` `` custom<Timing>("getOperationName()", $start_cycles, $duration_cycles, $period_cycles) attr-dict `:` functional-type($args, results)
+  }];
+  let hasVerifier = 1;
 }
 
 //===----------------------------------------------------------------------===//

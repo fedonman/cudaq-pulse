@@ -33,9 +33,9 @@ if TYPE_CHECKING:
 __all__ = ["Time", "ns", "us", "ms", "s"]
 
 
+# *value*, a real number, as the coprime numerator and positive
+# denominator its decimal digits give: ``0.1`` is 1/10.
 def _exact(value: Any) -> tuple[int, int]:
-    """*value*, a real number, as the coprime numerator and positive
-    denominator its decimal digits give: ``0.1`` is 1/10."""
     cls = value.__class__
     if cls is int:
         return value, 1
@@ -280,9 +280,9 @@ class Time(float):
 _new_float = float.__new__
 
 
+# The time of *numerator* / *denominator* ns, given coprime with a
+# positive denominator.
 def _make(numerator: int, denominator: int, cls: type[Time] = Time) -> Time:
-    """The time of *numerator* / *denominator* ns, given coprime with a
-    positive denominator."""
     try:
         self = _new_float(cls, numerator / denominator)
     except OverflowError:

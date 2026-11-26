@@ -3,6 +3,23 @@
 
 // QOpToCuDensityMat conversion pass: lower qop dialect ops to cudm dialect ops
 // for GPU-accelerated quantum state evolution.
+//
+// Contents, in file order:
+//   Matrices                  Matrix, Banded, kron, embed
+//   Leaves and products       what the pass reads of the qop operators
+//   The pass                  runOnOperation, in these steps:
+//     Setup and checks                      options, @main, modes
+//     1 to 4. Runtime objects and the evolve
+//     5. Leaves                             matrices, elementary operators
+//     6. Products                           each product and its term
+//     The generator's products; appending a dissipator
+//     7 and 8. Operator terms               one term each, or fused:
+//       Fused: two-sided pieces
+//       Fused: the dissipators' anticommutators
+//       Fused: time-dependent terms of one operator
+//       Fused: one-sided sums and the terms left, per side
+//     9. Evolve                             cudm.evolve
+//     10. Cleanup                           destroy in reverse order
 
 #include "llvm/ADT/MapVector.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -54,6 +71,8 @@ constexpr int64_t kDefaultMaxFusedDimension = 16;
 /// does: the ladder and number operators and their sums.
 constexpr int64_t kMinMultidiagonalExtent = 4;
 constexpr size_t kMaxDiagonals = 1;
+
+// ── Matrices ────────────────────────────────────────────────────────────────
 
 /// A square matrix on an ordered list of modes: column-major, the first
 /// mode's index varying fastest, as cuDensityMat stores a dense elementary
@@ -262,6 +281,8 @@ Matrix embed(const Matrix &matrix, ArrayRef<int32_t> sub,
   return result;
 }
 
+// ── Leaves and products ─────────────────────────────────────────────────────
+
 /// A qop leaf operator: the mode it acts on, its matrix and its adjoint's.
 struct Leaf {
   int32_t mode = 0;
@@ -286,6 +307,8 @@ struct Product {
     return sorted;
   }
 };
+
+// ── The pass ────────────────────────────────────────────────────────────────
 
 struct QOpToCuDensityMatPass
     : public PassWrapper<QOpToCuDensityMatPass, OperationPass<ModuleOp>> {
@@ -331,6 +354,7 @@ struct QOpToCuDensityMatPass
       llvm::cl::init(kDefaultMaxFusedDimension)};
 
   void runOnOperation() override {
+    // ── Setup and checks ────────────────────────────────────────────────────
     auto module = getOperation();
     OpBuilder b(module.getContext());
 
@@ -370,7 +394,7 @@ struct QOpToCuDensityMatPass
     b.setInsertionPoint(returnOp);
     auto loc = returnOp->getLoc();
 
-    // --- Determine qudit_count from module attributes or from qop.spin ops ---
+    // The qudit count, from the module's attributes or from the qop.spin ops.
     int64_t quditCount = 1;
     auto nqAttr = module->getAttrOfType<IntegerAttr>("qop.qudit_count");
     if (!nqAttr)
@@ -409,6 +433,7 @@ struct QOpToCuDensityMatPass
     auto opTermTy = cudm::OpTermType::get(b.getContext());
     auto operatorTy = cudm::OperatorType::get(b.getContext());
 
+    // ── 1 to 4. Runtime objects and the evolve ──────────────────────────────
     // 1. cudm.init_handle
     auto handle = cudm::InitHandleOp::create(b, loc, handleTy);
 
@@ -450,7 +475,8 @@ struct QOpToCuDensityMatPass
     auto compositeOp = cudm::CreateOperatorOp::create(b, loc, operatorTy,
                                                       handle, modeExtentsAttr);
 
-    // 5. The matrix of each leaf: a Pauli matrix for qop.spin, the data of
+    // ── 5. Leaves ───────────────────────────────────────────────────────────
+    // The matrix of each leaf: a Pauli matrix for qop.spin, the data of
     // a qop.matrix_leaf (dense, column-major, for qudits of more levels).
     llvm::MapVector<Operation *, Leaf> leaves;
     module.walk([&](qop::SpinOp spin) {
@@ -587,7 +613,7 @@ struct QOpToCuDensityMatPass
       return adjoint;
     };
 
-    // 6. The qop products.
+    // ── 6. Products ─────────────────────────────────────────────────────────
     llvm::MapVector<Operation *, Product> products;
     bool conversionFailed = false;
     module.walk([&](qop::MakeProductOp op) {
@@ -718,6 +744,7 @@ struct QOpToCuDensityMatPass
         termOf(entry.first);
     }
 
+    // ── The generator's products; appending a dissipator ────────────────────
     auto hamiltonian =
         lindblad.getHamiltonian().getDefiningOp<qop::MakeSumOp>();
     if (!hamiltonian) {
@@ -806,6 +833,7 @@ struct QOpToCuDensityMatPass
         appendTerm(normTerm, duality, -0.5 * coefficientNorm);
     };
 
+    // ── 7 and 8. Operator terms ─────────────────────────────────────────────
     if (!fuse) {
       // 7. -i[H,rho]. A pure-state evolution only needs the ket action; a
       // mixed-state evolution also needs the opposite-sign bra action.
@@ -874,7 +902,8 @@ struct QOpToCuDensityMatPass
         return result;
       };
 
-      // Two-sided pieces: rho -> ket rho, rho bra, or ket rho bra.
+      // ── Fused: two-sided pieces ───────────────────────────────────────────
+      // rho -> ket rho, rho bra, or ket rho bra.
       struct SidedPiece {
         Modes modes;
         std::optional<Matrix> ket, bra;
@@ -969,6 +998,7 @@ struct QOpToCuDensityMatPass
         }
       }
 
+      // ── Fused: the dissipators' anticommutators ───────────────────────────
       // One-sided pieces: the remaining constant terms on few enough levels,
       // and the anticommutators of the remaining dissipators, summed per
       // group of modes on each side.
@@ -989,10 +1019,10 @@ struct QOpToCuDensityMatPass
         foldedNorms.insert(op);
       }
 
-      // Time-dependent terms of the same operator, such as the pulses one
-      // drive plays, become one term whose callback sums theirs. A group is
-      // named by its first product; a product the Hamiltonian lists twice is
-      // a member twice.
+      // ── Fused: time-dependent terms of one operator ───────────────────────
+      // Such terms, for example the pulses one drive plays, become one term
+      // whose callback sums theirs. A group is named by its first product; a
+      // product the Hamiltonian lists twice is a member twice.
       DenseMap<Operation *, Operation *> groupOf;
       DenseMap<Operation *, SmallVector<Operation *>> membersOf;
       {
@@ -1051,6 +1081,7 @@ struct QOpToCuDensityMatPass
         return term;
       };
 
+      // ── Fused: one-sided sums and the terms left, per side ────────────────
       for (int32_t side : {0, 1}) {
         if (side == 1 && !hasDissipation)
           break;
@@ -1104,7 +1135,7 @@ struct QOpToCuDensityMatPass
         appendDissipator(op, !foldedNorms.contains(op));
     }
 
-    // 9. cudm.evolve
+    // ── 9. Evolve ───────────────────────────────────────────────────────────
     double tStart = 0.0, tEnd = 100.0;
     int64_t numSteps = 100;
     auto tsAttr = module->getAttrOfType<FloatAttr>("qop.t_start");
@@ -1140,7 +1171,7 @@ struct QOpToCuDensityMatPass
         integratorAttr, b.getF64FloatAttr(tStart), b.getF64FloatAttr(tEnd),
         b.getI64IntegerAttr(numSteps), cudm::ComputeTypeAttr());
 
-    // 10. Cleanup (destroy in reverse order)
+    // ── 10. Cleanup ─────────────────────────────────────────────────────────
     cudm::DestroyOperatorOp::create(b, loc, compositeOp);
     for (Value term : llvm::reverse(allOperatorTerms))
       cudm::DestroyOpTermOp::create(b, loc, term);

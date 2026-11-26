@@ -607,6 +607,32 @@ pulseTrain(ArrayRef<pulse::Occurrence> occurrences,
   return train;
 }
 
+/// Each drive of `driveOrder` once for each qudit its line names, with the
+/// place of the qudit among them: one qudit, or on a broadcast line each of
+/// the line's. Not inlined, like memberQudit: the pass is then compiled as
+/// it is without them.
+LLVM_ATTRIBUTE_NOINLINE SmallVector<std::pair<Operation *, unsigned>>
+drivenQudits(ArrayRef<Operation *> driveOrder, pulse::AllocationTracer &trace) {
+  SmallVector<std::pair<Operation *, unsigned>> driven;
+  driven.reserve(driveOrder.size());
+  for (Operation *op : driveOrder) {
+    Operation *allocation = trace(op->getOperand(0));
+    unsigned reached = allocation ? allocation->getNumOperands() : 1;
+    for (unsigned member = 0; member < reached; ++member)
+      driven.push_back({op, member});
+  }
+  return driven;
+}
+
+/// The index of qudit `member` of the qudits the line `allocation` names
+/// (a broadcast line names several), or -1.
+LLVM_ATTRIBUTE_NOINLINE int64_t memberQudit(Operation *allocation,
+                                            unsigned member) {
+  auto alloc =
+      allocation->getOperand(member).getDefiningOp<pulse::QuditAllocOp>();
+  return alloc ? alloc.getQuditAttr().getInt() : -1;
+}
+
 struct PulseToQOpPass
     : public PassWrapper<PulseToQOpPass, OperationPass<ModuleOp>> {
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(PulseToQOpPass)
@@ -955,10 +981,16 @@ struct PulseToQOpPass
     // 2. Time-dependent drive terms
     int driveIdx = 0;
     pulse::AllocationTracer trace;
-    for (Operation *op : driveOrder) {
+    // A drive on a broadcast line drives each qudit its line names, with
+    // that qudit's own frequency and amplitude scale.
+    for (const std::pair<Operation *, unsigned> &target :
+         drivenQudits(driveOrder, trace)) {
+      Operation *op = target.first;
       auto &occurrences = drives[op];
       auto *allocation = trace(op->getOperand(0));
       int64_t qubitIdx = allocation ? pulse::quditOf(allocation) : -1;
+      if (target.second)
+        qubitIdx = memberQudit(allocation, target.second);
       if (qubitIdx < 0) {
         op->emitError("cannot determine the qudit of this drive; the line "
                       "must come from a pulse.get_drive_line of a "

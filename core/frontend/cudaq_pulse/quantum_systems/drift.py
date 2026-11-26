@@ -43,7 +43,13 @@ import numpy as np
 from .._device import QuantumSystem, Qudit, _Handles
 from .._errors import InvalidTypeError, InvalidValueError, UnsupportedError
 from .._units import Time
-from .base import MicrowaveDrive, PhysicalQudit, _qudit_value_problems
+from .base import (
+    MicrowaveDrive,
+    PhysicalQudit,
+    _frequency_frame,
+    _HeldQudit,
+    _qudit_value_problems,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -209,8 +215,8 @@ class ParameterDrift:
     ) -> PhysicalQudit:
         changes: dict[str, Any] = {}
         if self.frequency is not None:
-            calibrated_hz = calibrated.frequency_hz
-            offset = true.frequency_hz - calibrated_hz
+            calibrated_hz = calibrated._frame_hz
+            offset = true._frame_hz - calibrated_hz
             changes["frequency_hz"] = calibrated_hz + self.frequency._step(offset, seconds, rng)
         if self.t1 is not None:
             low = calibrated.t1_us * self.t1.low_fraction
@@ -322,15 +328,31 @@ def _checked(qudit: Any, carrier: int, method: str) -> PhysicalQudit:
     have: checked here, so the error names the model's method and not the
     system's definition at the next ``simulate``."""
     if qudit.__class__ is not PhysicalQudit or qudit.index != carrier:
+        if isinstance(qudit, _HeldQudit):
+            raise UnsupportedError(
+                f"qudit {carrier} gives no absolute frequency_hz (it is {qudit.frequency_hz!r}), "
+                "so its true value has no frequency to drift from; parameter_drift needs qudits "
+                "with frequencies"
+            )
         raise InvalidTypeError(
             f"a drift model's {method}() returns the qudit's PhysicalQudit (index {carrier}), "
             f"as true.replace(...) makes; got {qudit!r}"
         )
     problems = _qudit_value_problems(qudit, f"{method}()")
     if problems:
+        frequency = qudit.frequency_hz
+        # Whatever class the model returned: a true value without an
+        # absolute frequency is refused, on a system with frequencies and on
+        # one whose qudits give offsets or none.
+        drifts = (
+            ""
+            if frequency is not None and _frequency_frame(frequency) == "absolute"
+            else f" (its frequency_hz is {frequency!r}: parameter_drift needs qudits with "
+            "frequencies, and a true value keeps one)"
+        )
         raise InvalidValueError(
             f"a drift model's {method}() returned qudit {carrier} with values a quantum system "
-            "cannot have",
+            f"cannot have{drifts}",
             problems=problems,
         )
     return qudit

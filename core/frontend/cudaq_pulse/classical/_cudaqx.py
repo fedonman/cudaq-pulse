@@ -118,6 +118,56 @@ _MESSAGES = {
     )
 }
 
+# What a submission of each message sends before its measurements, word by
+# word: the decoder id or the length its version is named after ("id",
+# "length"), a constant, or a value of the caller's (None). ``_Calls._wire``
+# sends these, and a module loaded from another compiler is held to them.
+_WORDS: dict[str, tuple[tuple[str, Any], ...]] = {
+    "enqueue_syndromes": (
+        ("decoder_id", "id"),
+        ("tag", None),
+        ("syndrome_mapping_id", 0),
+        ("number of syndromes", "length"),
+    ),
+    "enqueue_syndromes_mapped": (
+        ("decoder_id", "id"),
+        ("tag", None),
+        ("syndrome_mapping_id", None),
+        ("number of syndromes", "length"),
+    ),
+    "get_corrections": (("decoder_id", "id"), ("return_size", "length"), ("reset", None)),
+    "get_logical_measurements": (
+        ("decoder_id", "id"),
+        ("first", None),
+        ("return_size", "length"),
+        ("reset", None),
+    ),
+    "reset_decoder": (("decoder_id", "id"),),
+}
+
+
+def _message_version(name: str) -> tuple[Any, tuple[int, ...]] | None:
+    """The CUDA-Q QEC decoder message *name* is a version of, and the
+    version's numbers (the decoder id, then a length), as ``compile`` names
+    one: ``get_corrections__3_1``."""
+    import re
+
+    # ASCII digits only: the name must be the one compile writes.
+    found = re.fullmatch(r"([a-z_]+?)__(0|[1-9][0-9]{0,18})(?:_([1-9][0-9]{0,18}))?", name)
+    if found is None:
+        return None
+    message = _MESSAGES.get(found[1])
+    numbers = tuple(int(n) for n in found.groups()[1:] if n is not None)
+    # With numbers a message's word holds, as many as its name has.
+    if (
+        message is None
+        or len(numbers) != (1 if message.name == "reset_decoder" else 2)
+        or any(n >= 2**63 for n in numbers)
+    ):
+        return None
+    return message, numbers
+
+
 _RELEASED = ", ".join(f"cudaq_qec.qec.{m.name}" for m in _MESSAGES.values() if m.released)
 
 

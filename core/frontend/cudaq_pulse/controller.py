@@ -407,16 +407,112 @@ def evaluate_expression(
     *readouts* gives the level each readout event the expression reads
     observed, and *answers* the results of each answer event, both by the
     event index the expression names. A frame change's value may be a
-    number, which is its value. Raises ``ExecutionError`` where the
-    controller must fail the run (a division by zero, say), and
-    ``InvalidValueError`` for an input not given or a term not of
-    ``ExpressionTerm``.
+    number, which is its value. A term that several terms use is in the
+    expression's ``terms`` and ``{"term": n}`` where it is used; it is
+    computed once. An expression may be any number of terms deep. Raises
+    ``ExecutionError`` where the controller must fail the run (a division
+    by zero, say), and ``InvalidValueError`` for an input not given or a
+    term not of ``ExpressionTerm``.
     """
     value: float | int | bool = _evaluate(expression, readouts or {}, answers or {})
     return value
 
 
 def _evaluate(
+    expression: Any,
+    readouts: Mapping[int, int],
+    answers: Mapping[int, Sequence[float | int | bool]],
+) -> Any:
+    if not _is_term(expression):
+        return _leaf(expression, readouts, answers)
+    terms = expression.get("terms", ())
+    known: dict[int, Any] = {}
+    # The terms being computed, innermost last: each with its type, the
+    # values of its operands so far, its place in ``terms`` if it is one of
+    # them, and how many of ``terms`` it may use. Operands are computed in
+    # order, as nested calls would.
+    computing: list[tuple[Mapping[str, Any], Any, list[Any], int | None, int]] = [
+        (expression, _kind(expression), [], None, len(terms))
+    ]
+    while True:
+        node, kind, values, place, earlier = computing[-1]
+        of = node["of"]
+        if len(values) < len(of):
+            operand = of[len(values)]
+            if isinstance(operand, Mapping) and "term" in operand:
+                n = operand["term"]
+                if type(n) is not int or not 0 <= n < earlier:
+                    raise InvalidValueError(
+                        f"{operand!r} is not an earlier term of the expression's terms"
+                    )
+                if n in known:
+                    values.append(known[n])
+                else:
+                    computing.append((terms[n], _kind(terms[n], inner=True), [], n, n))
+            elif _is_term(operand):
+                computing.append((operand, _kind(operand, inner=True), [], None, earlier))
+            else:
+                values.append(_leaf(operand, readouts, answers))
+            continue
+        value = _computed(node, kind, values)
+        computing.pop()
+        if not computing:
+            return value
+        if place is not None:
+            known[place] = value
+        computing[-1][2].append(value)
+
+
+def _with_leaves(expression: Any, leaf: Callable[[Any], Any]) -> Any:
+    """A copy of *expression*, and of its ``terms``, with ``leaf(x)`` for
+    each ``x`` that is not computed from operands, however deep it is."""
+    if not isinstance(expression, dict) or "of" not in expression:
+        return leaf(expression)
+
+    def copied(top: dict[str, Any]) -> dict[str, Any]:
+        copying: list[tuple[dict[str, Any], list[Any]]] = [(top, [])]
+        while True:
+            node, of = copying[-1]
+            if len(of) < len(node["of"]):
+                operand = node["of"][len(of)]
+                if isinstance(operand, dict) and "of" in operand:
+                    copying.append((operand, []))
+                else:
+                    of.append(leaf(operand))
+                continue
+            copying.pop()
+            copy = {**node, "of": of}
+            if not copying:
+                return copy
+            copying[-1][1].append(copy)
+
+    root = copied(expression)
+    if "terms" in root:
+        root["terms"] = [copied(term) for term in root["terms"]]
+    return root
+
+
+def _is_term(expression: Any) -> bool:
+    """Whether *expression* is computed from operands: not a number, a
+    constant, a readout's level, an answer's result or a use of a term."""
+    return isinstance(expression, Mapping) and not (
+        "const" in expression
+        or "readout" in expression
+        or "answer" in expression
+        or "term" in expression
+    )
+
+
+def _kind(expression: Mapping[str, Any], inner: bool = False) -> Any:
+    if inner and "terms" in expression:
+        raise InvalidValueError("only a whole expression has terms, not a term of it")
+    op = expression.get("op")
+    if op not in _EXPRESSION_TERMS:
+        raise InvalidValueError(f"{op!r} is not a term of the expression vocabulary")
+    return _TYPES[expression["type"]]
+
+
+def _leaf(
     expression: Any,
     readouts: Mapping[int, int],
     answers: Mapping[int, Sequence[float | int | bool]],
@@ -437,11 +533,13 @@ def _evaluate(
         if index not in answers or not 0 <= result < len(answers[index]):
             raise InvalidValueError(f"no result {result} given for answer event {index}")
         return answers[index][result]
-    op = expression.get("op")
-    if op not in _EXPRESSION_TERMS:
-        raise InvalidValueError(f"{op!r} is not a term of the expression vocabulary")
-    kind = _TYPES[expression["type"]]
-    values = [_evaluate(x, readouts, answers) for x in expression["of"]]
+    raise InvalidValueError(f"{expression!r} is a term of no expression's terms")
+
+
+def _computed(expression: Mapping[str, Any], kind: Any, values: list[Any]) -> Any:
+    """What term *expression* of type *kind* computes of its operands'
+    *values*."""
+    op = expression["op"]
     if op == "select":
         condition, then, other = values
         return kind(then if condition else other)
@@ -654,6 +752,7 @@ def _walk(
     waveforms: bool = True,
     slots: list[int] | None = None,
     summary: tuple[list[tuple[int, ...]], list[tuple[int, int, int]] | None] | None = None,
+    segments: list[Any] | None = None,
 ) -> tuple[
     list[Any],
     list[dict[str, Any]],
@@ -699,7 +798,7 @@ def _walk(
         with lowered._lock:
             if own is None:
                 lines, events = module.controller_events(
-                    _PARAMETERS, _AMPLITUDES, slots, repeats, periods
+                    _PARAMETERS, _AMPLITUDES, slots, repeats, periods, segments
                 )
             else:
                 ratio = own.ratio
@@ -911,9 +1010,7 @@ def _export(
             program = _export_structured(lowered, sample_rate_ghz, emulation, role)
             if not system._shares:
                 return program
-            from ._shared_lines import structured
-
-            return structured(program, system)
+            return system._shares.structured(program, system)  # type: ignore[no-any-return]
         if controller is not None:
             _controller_index(controller, 1)
         return _export_structured(lowered, sample_rate_ghz, emulation, role)
@@ -943,9 +1040,7 @@ def _export(
             if violations:
                 raise _limit_error(lowered, violations)
         if system._shares:
-            from ._shared_lines import flat
-
-            tone_slots = flat(system, lines, events)
+            tone_slots = system._shares.flat(system, lines, events)
     elif limits is not None:
         _check_at_export(lowered, limits, clocks, (lines, events, frames, off, problems))
     if clocks is None:
@@ -990,19 +1085,8 @@ def _export(
     if frames:
         program = _with_frames(program, frames, _slot_names(events, role))
         if system is not None and system._shares:
-            _framed_slots(program, tone_slots)
+            system._shares.framed(program, tone_slots)
     return program
-
-
-def _framed_slots(program: dict[str, Any], tone_slots: Mapping[int, int]) -> None:
-    """Give the ``frame_state`` and ``runtime_tones`` entries of format /1
-    *program* on a line keeping one tone slot (*tone_slots*, by line) the
-    slot, in place."""
-    from ._shared_lines import flat_frames
-
-    for key in ("frame_state", "runtime_tones"):
-        if key in program:
-            program[key] = flat_frames(program[key], tone_slots)
 
 
 def _with_frames(
@@ -1309,17 +1393,18 @@ def unroll(program: Mapping[str, Any]) -> dict[str, Any]:
     latest: dict[int, int] = {}
     branches: dict[tuple[Any, ...], int] = {}
 
+    def place_of(leaf: Any) -> Any:
+        if not isinstance(leaf, dict):
+            return leaf
+        if "readout" in leaf:
+            return {"readout": latest[leaf["readout"]]}
+        if "answer" in leaf:
+            return {"answer": latest[leaf["answer"]], "result": leaf["result"]}
+        return dict(leaf)
+
     def resolve(expression: Any) -> Any:
         """A run-time expression with its /2 places as /1 indices."""
-        if not isinstance(expression, dict):
-            return expression
-        if "readout" in expression:
-            return {"readout": latest[expression["readout"]]}
-        if "answer" in expression:
-            return {"answer": latest[expression["answer"]], "result": expression["result"]}
-        if "of" in expression:
-            return {**expression, "of": [resolve(e) for e in expression["of"]]}
-        return dict(expression)
+        return _with_leaves(expression, place_of)
 
     def frame_updates(
         updates: Sequence[Mapping[str, Any]], branch: Any, shift: int = 0
@@ -1551,6 +1636,8 @@ def _handles(
         for handle, line in zip(same, program["lines"], strict=True):
             if "native_frequencies_hz" in line:
                 handle["native_frequency_hz"] = line["native_frequencies_hz"][0]
+            elif "broadcast" in line:
+                raise _no_broadcast_unroll(line)
         return same, {(line["line"], line["qudit"]): line["line"] for line in same}, None
     played: set[tuple[int, int]] = set()
     stack = [program["events"]]
@@ -1580,11 +1667,21 @@ def _handles(
             if "native_frequencies_hz" in line:
                 at = line["qudits"].index(qudit)
                 entry["native_frequency_hz"] = line["native_frequencies_hz"][at]
+            elif "broadcast" in line:
+                raise _no_broadcast_unroll(line)
             handle_of[(line["line"], qudit)] = len(lines)
             mine.append(len(lines))
             lines.append(entry)
         handles.append(mine)
     return lines, handle_of, handles
+
+
+def _no_broadcast_unroll(line: Mapping[str, Any]) -> UnsupportedError:
+    return UnsupportedError(
+        f"line {line['line']} is a broadcast drive line, which format /1 writes with its "
+        "qudits on the line and on each of its events; unrolling one is not supported "
+        "yet: export the program in format /1, as export_to_controller(version=1)"
+    )
 
 
 def _on_handles(
@@ -1862,12 +1959,10 @@ class _Parts:
             self.lines, self.events, self.frames, self.owners, self.parts = [], [], {}, [], []
             return violations
         if system._shares:
-            from ._shared_lines import flat
-
             # From the whole program, in program cycles: a shared line is one
             # controller's, and its slots are those of every export of the
             # program.
-            self.tone_slots = flat(system, self.lines, events)
+            self.tone_slots = system._shares.flat(system, self.lines, events)
         role = lowered._role
         if role is not None:
             plan = role.export_plan
@@ -2057,7 +2152,7 @@ def _export_part(
         exported = _with_frames(exported, tones, shared.names(role))
         if system._shares:
             assert shared.tone_slots is not None
-            _framed_slots(exported, shared.tone_slots)
+            system._shares.framed(exported, shared.tone_slots)
     _exported(lowered, shared, index, count)
     return exported
 

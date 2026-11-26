@@ -3,6 +3,7 @@
 
 add_mlir_dialect_library(CudaqPulsePulse
   PulseAttrs.cpp
+  PulseCallOp.cpp
   PulseDialect.cpp
   PulseOps.cpp
   PulseTypes.cpp
@@ -15,4 +16,5 @@ add_mlir_dialect_library(CudaqPulsePulse
   MLIRIR
   MLIRSupport
   MLIRBytecodeOpInterface
+  MLIRFunctionInterfaces
 )

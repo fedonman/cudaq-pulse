@@ -281,8 +281,6 @@ ignore = ["UP018"]
 
 [tool.ruff.lint.per-file-ignores]
 "test/**/lit*.cfg.py" = ["F821"]
-# DSL intrinsic stubs: their parameters exist for the signatures and types.
-"core/frontend/cudaq_pulse/ops/__init__.py" = ["ARG"]
 # Short corpus constructors (_C, _O, ...).
 "tests/workloads/bug_corpus.py" = ["N802"]
 # Column-aligned report tables.
@@ -312,4 +310,8 @@ markers = [
     "physics: physics verification against reference values (tests/physics)",
     "nightly: slow physics check, skipped unless --run-nightly is given",
     "slow: spends seconds in native code or child processes; the sanitizer job leaves it out",
+    "level0: contract test, run first and everywhere (--level 0); see CONTRIBUTING.md",
+    "level1: behaviour test, the level of a test without a level marker (--level 1)",
+    "level2: exhaustive test: a sweep, a property test or a large program (--level 2)",
+    "level3: fine detail or a long case (--level 3); not the nightly marker",
 ]

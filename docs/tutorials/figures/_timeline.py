@@ -897,13 +897,15 @@ def draw_stack(
 ):
     """Timelines one above the other on one time axis, each under its title, to
     compare schedules of the same program, or to show the steps of one; *labels*
-    gives each its own *pulse_labels*."""
+    gives each its own *pulse_labels*, and *xlim* the stretch of time to show
+    (by default, all of the longest)."""
     sizes = {k: options.pop(k) for k in ("lane_in", "link_in") if k in options}
     lanes = [layout(t, **sizes) for t in timelines]
     labels = labels or [options.pop("pulse_labels", None)] * len(timelines)
     gap, bottom = 0.42, 0.42
     height = sum(lane[2] + 0.12 for lane in lanes) + gap * len(lanes) + bottom - 0.1
     end = max(max([pl.end_ns for pl in t.pulses] + [1.0]) for t in timelines)
+    xlim = options.pop("xlim", None) or (0, end * 1.01)
     fig = plt.figure(figsize=(width_in, height))
     left, y = 1.25 / width_in, height
     rows = zip(timelines, lanes, titles, labels, strict=True)
@@ -916,7 +918,7 @@ def draw_stack(
             timeline,
             p,
             lanes=lane,
-            xlim=(0, end * 1.01),
+            xlim=xlim,
             xlabel=last,
             pulse_labels=words,
             **options,

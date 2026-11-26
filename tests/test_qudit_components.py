@@ -40,6 +40,7 @@ class _Optical(Drive):
     """A drive no model knows."""
 
     __slots__ = ()
+    _fields = ()
 
     def __init__(self) -> None:
         object.__setattr__(self, "_values", ())
@@ -158,6 +159,69 @@ def test_the_drive_strength_comes_from_the_drive():
         _target(drive=MicrowaveDrive(amplitude_scale_rad_per_ns=0.0)).drive_amplitude_scale(0)
     with pytest.raises(pulse.UnsupportedError, match="no drive model for _Optical"):
         _target(drive=_Optical()).drive_amplitude_scale(0)
+
+
+def test_a_drive_of_no_stated_modality_gives_its_scale():
+    drive = Drive(amplitude_scale_rad_per_ns=0.2)
+    assert drive.amplitude_scale_rad_per_ns == 0.2 and Drive().amplitude_scale_rad_per_ns is None
+    assert Drive._fields == MicrowaveDrive._fields == ("amplitude_scale_rad_per_ns",)
+    assert repr(drive) == "Drive(amplitude_scale_rad_per_ns=0.2)" and repr(Drive()) == "Drive()"
+    assert repr(MicrowaveDrive(amplitude_scale_rad_per_ns=0.2)) == (
+        "MicrowaveDrive(amplitude_scale_rad_per_ns=0.2)"
+    )
+    # The two are different components, equal only to their own kind.
+    assert drive == Drive(amplitude_scale_rad_per_ns=0.2) and hash(drive) == hash(drive.replace())
+    microwave = MicrowaveDrive(amplitude_scale_rad_per_ns=0.2)
+    assert drive != microwave and microwave != drive and hash(drive) != hash(microwave)
+    assert len({drive, microwave, Drive(amplitude_scale_rad_per_ns=0.2)}) == 2
+    assert drive.replace(amplitude_scale_rad_per_ns=0.3) == Drive(amplitude_scale_rad_per_ns=0.3)
+    for back in (pickle.loads(pickle.dumps(drive)), copy.deepcopy(drive)):
+        assert back == drive and type(back) is Drive
+    with pytest.raises(TypeError):
+        Drive(0.2)  # type: ignore[call-arg]
+    with pytest.raises(TypeError):
+        Drive(x_amplitude=0.2)  # type: ignore[call-arg]
+    with pytest.raises(AttributeError, match="is read-only"):
+        drive.amplitude_scale_rad_per_ns = 0.3  # type: ignore[misc]
+
+
+def test_the_drive_strength_comes_from_a_drive_of_no_stated_modality():
+    assert _target(drive=Drive(amplitude_scale_rad_per_ns=2.0)).drive_amplitude_scale(0) == 2.0
+    pi = {pulse.gates.X: DragPulse(duration_ns=40.0, sigma_ns=10.0, amplitude=0.5)}
+    area = 10.0 * math.sqrt(2 * math.pi) * math.erf(40.0 / (2 * math.sqrt(2) * 10.0))
+    for drive in (Drive(), MicrowaveDrive()):
+        published = _target(drive=drive, calibrations=pi)
+        assert published.drive_amplitude_scale(0) == pytest.approx(math.pi / (0.5 * area))
+    assert _target(drive=Drive()).drive_amplitude_scale(0) == 1.0
+    with pytest.raises(pulse.InvalidValueError, match="must be positive"):
+        _target(drive=Drive(amplitude_scale_rad_per_ns=-1.0)).drive_amplitude_scale(0)
+    # A pi pulse no amplitude is published for is derived from either's scale.
+    unpublished = {pulse.gates.X: DragPulse(duration_ns=40.0, sigma_ns=10.0)}
+    amplitudes = [
+        PhysicalQudit(0, 5e9, 10.0, 5.0, drive=drive, calibrations=unpublished)
+        .get_calibration(pulse.gates.X)
+        .amplitude
+        for drive in (
+            Drive(amplitude_scale_rad_per_ns=2.0),
+            MicrowaveDrive(amplitude_scale_rad_per_ns=2.0),
+            Drive(amplitude_scale_rad_per_ns=1.0),
+        )
+    ]
+    assert amplitudes[0] == amplitudes[1] == pytest.approx(amplitudes[2] / 2)
+
+
+@pytest.mark.parametrize("made", [Drive, MicrowaveDrive])
+def test_a_square_pulse_turns_the_qudit_by_its_scale(made):
+    qudit = PhysicalQudit(0, 5e9, 0.0, 0.0, drive=made(amplitude_scale_rad_per_ns=0.5))
+    qs = pulse.quantum_system(name="turn", qudits={0: qudit}, model=TransmonModel(levels={0: 2}))
+
+    @pulse.kernel
+    def turn(q):
+        drive(get_drive_line(q), square(20 * pulse.ns, math.pi / 20))  # noqa: F821
+
+    # 20 ns at pi / 20 with a scale of 0.5 is a quarter turn.
+    result = pulse.simulate(turn, qs.qudits[0], quantum_system=qs)
+    assert result.level_population(1) == pytest.approx(0.5, abs=1e-3)
 
 
 def test_a_readout_no_model_knows_is_refused():

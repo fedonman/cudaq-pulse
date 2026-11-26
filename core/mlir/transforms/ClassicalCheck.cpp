@@ -58,11 +58,48 @@
 #include <optional>
 #include <vector>
 
+namespace pulse {
+/// What the waits of run-time length of a scheduled `module` add under its
+/// controllers' longest programs, if it lists any (PulseProgramLimits.cpp).
+mlir::LogicalResult checkWaitLimits(mlir::ModuleOp module);
+} // namespace pulse
+
 namespace {
 
 /// Loops of at least this many trips are checked from one copy of their
 /// body.
 constexpr int64_t kSummarizedTrips = 64;
+
+/// The times the calls of a function are counted and ordered at: starts,
+/// and the lengths added to them, of at most this many cycles either way,
+/// so that the sums and differences of a few of them fit 64 bits. A call
+/// with a time outside it is reported, not computed with. (A loaded
+/// module's times are within 2^50.)
+constexpr int64_t kMostCycles = int64_t(1) << 61;
+
+static bool withinCycles(int64_t cycles) {
+  return cycles >= -kMostCycles && cycles <= kMostCycles;
+}
+
+/// pulse::scheduledStart within kMostCycles: none when `op` has no start,
+/// or its start in `iteration` is outside it or does not fit 64 bits. An
+/// op outside loops needs no periods.
+static std::optional<int64_t> startWithin(mlir::Operation *op,
+                                          llvm::ArrayRef<int64_t> iteration) {
+  std::optional<int64_t> start = pulse::startCycles(op);
+  if (!start)
+    return std::nullopt;
+  int64_t time = *start;
+  if (!iteration.empty())
+    for (auto [k, period] : llvm::zip(iteration, pulse::periodCycles(op))) {
+      int64_t moved;
+      if (__builtin_mul_overflow(k, period, &moved))
+        return std::nullopt;
+      if (__builtin_add_overflow(time, moved, &time))
+        return std::nullopt;
+    }
+  return withinCycles(time) ? std::optional<int64_t>(time) : std::nullopt;
+}
 
 /// The executions of a submission over the iterations of one loop, or its
 /// one execution: in iteration k of `count` it starts at start + k *
@@ -153,21 +190,29 @@ struct Submissions {
                bool inBranch) {
     for (mlir::Operation &op : block) {
       if (auto submit = mlir::dyn_cast<classical::SubmitOp>(op)) {
-        auto start = pulse::scheduledStart(&op, iteration);
-        if (!start)
+        auto start = startWithin(&op, iteration);
+        int64_t duration = pulse::scheduledDuration(&op).value_or(1);
+        int64_t budget = classical::intAttr(&op, "classical.budget_cycles");
+        if (!start || !withinCycles(duration) || !withinCycles(budget)) {
+          if (pulse::hasStart(&op))
+            past(submit);
           continue;
+        }
         LinkKey device{classical::intAttr(&op, "classical.device"),
                        classical::intAttr(&op, classical::kInstanceAttr, -1),
                        classical::intAttr(&op, classical::kTimelineAttr, -1)};
-        int64_t duration = pulse::scheduledDuration(&op).value_or(1);
         if (!Ordering || recording) {
           int64_t period = 0;
           if (level) {
             iteration[*level] = 1;
-            period = *pulse::scheduledStart(&op, iteration) - *start;
+            auto next = startWithin(&op, iteration);
             iteration[*level] = 0;
+            if (!next) {
+              past(submit);
+              continue;
+            }
+            period = *next - *start;
           }
-          int64_t budget = classical::intAttr(&op, "classical.budget_cycles");
           Run run{
               *start, period, level ? trips : 1, duration, duration + budget,
               group,  &op};
@@ -254,18 +299,33 @@ private:
                     llvm::Twine(answered));
   }
 
-  /// pulse::scheduledStart, which an op outside loops needs no periods for.
-  static std::optional<int64_t> startIn(mlir::Operation *op,
-                                        llvm::ArrayRef<int64_t> iteration) {
-    if (!iteration.empty())
-      return pulse::scheduledStart(op, iteration);
-    return pulse::startCycles(op);
+  /// A call with a time the check does not compute with.
+  void past(classical::SubmitOp submit) {
+    error(submit, "the call of '" + submit.getCallee() +
+                      "' starts, or lasts, past the cycles a schedule counts "
+                      "in");
+  }
+
+  /// The start of `op`, an operation the order of calls depends on, in the
+  /// iteration walked; one with a time the check does not compute with is
+  /// reported, not passed over.
+  std::optional<int64_t> startIn(mlir::Operation *op,
+                                 llvm::ArrayRef<int64_t> iteration) {
+    std::optional<int64_t> start = startWithin(op, iteration);
+    if (!start && pulse::hasStart(op))
+      pastOperation(op);
+    return start;
+  }
+
+  void pastOperation(mlir::Operation *op) {
+    error(op, "an operation the order of calls depends on starts, or lasts, "
+              "past the cycles a schedule counts in");
   }
 
   /// When `op`, a readout or an answer the op walked depends on, ends in the
   /// iteration walked: the loops around it are among those around the op.
-  static std::optional<int64_t> endOf(mlir::Operation *op,
-                                      llvm::ArrayRef<int64_t> iteration) {
+  std::optional<int64_t> endOf(mlir::Operation *op,
+                               llvm::ArrayRef<int64_t> iteration) {
     size_t depth = 0;
     for (mlir::Operation *parent = op->getParentOp(); parent;
          parent = parent->getParentOp())
@@ -275,7 +335,12 @@ private:
     std::optional<int64_t> start = startIn(op, iteration.take_front(depth));
     if (!start)
       return std::nullopt;
-    return *start + pulse::scheduledDuration(op).value_or(0);
+    int64_t duration = pulse::scheduledDuration(op).value_or(0);
+    if (!withinCycles(duration)) {
+      pastOperation(op);
+      return std::nullopt;
+    }
+    return *start + duration;
   }
 
   void orderSubmit(classical::SubmitOp submit, int64_t start, int64_t duration,
@@ -369,33 +434,44 @@ static int64_t floorDiv(int64_t a, int64_t b) {
 
 static int64_t ceilDiv(int64_t a, int64_t b) { return -floorDiv(-a, b); }
 
-/// Whether a run's last execution ends without overflow.
+/// Whether a run's last execution starts within kMostCycles, as its first
+/// does: every execution then starts within it, and ends within three
+/// times it.
 static bool fits(const Run &run) {
-  int64_t span, last, end;
+  int64_t span, last;
   if (__builtin_mul_overflow(run.count - 1, run.period, &span))
     return false;
   if (__builtin_add_overflow(run.start, span, &last))
     return false;
-  if (__builtin_add_overflow(last, run.busy, &end))
-    return false;
-  return true;
+  return withinCycles(last);
 }
 
 /// The most requests `runs` hold at once and the earliest time they do (0
 /// when none is ever held), from every execution: a sweep over interval
-/// ends, each half-open (a slot freed at t can be reused at t).
+/// ends, each half-open (a slot freed at t can be reused at t). The
+/// executions of a run that does not move from one iteration to the next
+/// are all at one time, and counted there together.
 static std::pair<int64_t, int64_t> sweepInFlight(llvm::ArrayRef<Run> runs) {
-  std::vector<std::pair<int64_t, int>> events;
-  for (const Run &run : runs)
+  std::vector<std::pair<int64_t, int64_t>> events;
+  for (const Run &run : runs) {
+    if (run.period == 0) {
+      events.push_back({run.start, +run.count});
+      events.push_back({run.start + run.busy, -run.count});
+      continue;
+    }
     for (int64_t k = 0; k < run.count; ++k) {
       int64_t start = run.start + k * run.period;
       events.push_back({start, +1});
       events.push_back({start + run.busy, -1});
     }
+  }
   std::sort(events.begin(), events.end());
   int64_t inFlight = 0, worst = 0, when = 0;
   for (auto [time, delta] : events) {
-    inFlight += delta;
+    // The counts of runs that do not move can add up past 64 bits.
+    if (__builtin_add_overflow(inFlight, delta, &inFlight))
+      inFlight = delta > 0 ? std::numeric_limits<int64_t>::max()
+                           : std::numeric_limits<int64_t>::min();
     if (inFlight > worst) {
       worst = inFlight;
       when = time;
@@ -684,13 +760,63 @@ struct Stretches {
   llvm::SmallVector<std::pair<mlir::Operation *, int64_t>> ops;
 };
 
+/// A time in any iteration of the loops around an operation: a start, a
+/// period times an iteration, and sums of them over the loops. Starts,
+/// periods and trip counts are 64-bit numbers a module may state freely, so
+/// the sums are kept wider, and held at the widest number either way where
+/// even that would overflow.
+using Wide = __int128;
+
+static Wide wideAdd(Wide a, Wide b) {
+  Wide sum;
+  if (__builtin_add_overflow(a, b, &sum)) {
+    Wide most = static_cast<Wide>(~static_cast<unsigned __int128>(0) >> 1);
+    return b < 0 ? -most - 1 : most;
+  }
+  return sum;
+}
+
+static Wide wideMul(Wide a, Wide b) {
+  Wide product;
+  if (__builtin_mul_overflow(a, b, &product)) {
+    Wide most = static_cast<Wide>(~static_cast<unsigned __int128>(0) >> 1);
+    return (a < 0) != (b < 0) ? -most - 1 : most;
+  }
+  return product;
+}
+
+static std::string wideText(Wide value) {
+  if (value >= std::numeric_limits<int64_t>::min() &&
+      value <= std::numeric_limits<int64_t>::max())
+    return std::to_string(static_cast<int64_t>(value));
+  bool negative = value < 0;
+  auto left = negative ? -static_cast<unsigned __int128>(value)
+                       : static_cast<unsigned __int128>(value);
+  std::string digits;
+  for (; left; left /= 10)
+    digits.push_back(static_cast<char>('0' + static_cast<int>(left % 10)));
+  if (negative)
+    digits.push_back('-');
+  return std::string(digits.rbegin(), digits.rend());
+}
+
+/// The period of a timed operation in the loop at `level` around it,
+/// outermost first; none stated counts as none, as in scheduledStart.
+/// (Outside every loop the periods are not read at all.)
+static Wide periodAt(llvm::ArrayRef<int64_t> periods, size_t level) {
+  return level < periods.size() ? Wide(periods[level]) : Wide(0);
+}
+
 /// Check that every execution of `submit`, a call to `callable` with
 /// `reaction_deadline_ns`, has its answer due within it of the end of the
 /// latest readout it carries, or of its own start. The submission and each
-/// readout start affinely in the iteration, so each difference is checked
-/// at the corners of the submission's iteration box; the latest readout is
-/// at least as late as each, so the smallest of their worst cases bounds
-/// the reaction. A wait between a readout and the submission whose length
+/// readout start affinely in the iteration, so each difference is largest
+/// at a corner of the submission's iteration box: per loop, at its last
+/// iteration where the difference grows with it and at its first
+/// otherwise, which is the first such corner when the loops are counted
+/// with the outermost changing fastest. The latest readout is at least as
+/// late as each, so the smallest of their worst cases bounds the
+/// reaction. A wait between a readout and the submission whose length
 /// is known only when the program runs counts at its highest length. A
 /// request that leaves within `latency` (the feedback latency the schedule
 /// waits) of its readouts' end could not leave sooner, and the error says
@@ -729,9 +855,12 @@ static bool checkReaction(classical::SubmitOp submit,
                                                   readouts.end());
   if (references.empty())
     references.push_back(submit);
-  std::optional<int64_t> bound;
+  std::optional<Wide> bound;
   llvm::SmallVector<int64_t, 2> worstAt;
-  llvm::SmallVector<int64_t, 2> iteration(depth, 0);
+  llvm::ArrayRef<int64_t> sent =
+      depth ? pulse::periodCycles(submit) : llvm::ArrayRef<int64_t>();
+  Wide due = wideAdd(Wide(*pulse::startCycles(submit)),
+                     wideAdd(Wide(duration), Wide(budget)));
   for (mlir::Operation *reference : references) {
     size_t own = pulse::enclosingLoops(reference, function).size();
     if (!pulse::hasStart(reference) || own > depth)
@@ -750,20 +879,21 @@ static bool checkReaction(classical::SubmitOp submit,
              "drop reaction_deadline_ns";
       return false;
     }
-    std::optional<int64_t> worst;
-    llvm::SmallVector<int64_t, 2> at;
-    for (uint64_t corner = 0; corner < (uint64_t{1} << depth); ++corner) {
-      for (size_t level = 0; level < depth; ++level)
-        iteration[level] = (corner >> level) & 1 ? trips[level] - 1 : 0;
-      int64_t due =
-          *pulse::scheduledStart(submit, iteration) + duration + budget;
-      llvm::ArrayRef<int64_t> prefix(iteration.data(), own);
-      int64_t from = *pulse::scheduledStart(reference, prefix);
-      if (reference != submit.getOperation())
-        from += pulse::scheduledDuration(reference).value_or(0);
-      if (!worst || due + stretch - from > *worst) {
-        worst = due + stretch - from;
-        at.assign(iteration.begin(), iteration.end());
+    llvm::ArrayRef<int64_t> read =
+        depth ? pulse::periodCycles(reference) : llvm::ArrayRef<int64_t>();
+    Wide from = *pulse::startCycles(reference);
+    if (reference != submit.getOperation())
+      from =
+          wideAdd(from, Wide(pulse::scheduledDuration(reference).value_or(0)));
+    std::optional<Wide> worst = wideAdd(wideAdd(due, Wide(stretch)), -from);
+    llvm::SmallVector<int64_t, 2> at(depth, 0);
+    for (size_t level = 0; level < depth; ++level) {
+      Wide moves = wideAdd(periodAt(sent, level),
+                           -(level < own ? periodAt(read, level) : Wide(0)));
+      Wide grows = wideMul(moves, Wide(trips[level] - 1));
+      if (grows > 0) {
+        worst = wideAdd(*worst, grows);
+        at[level] = trips[level] - 1;
       }
     }
     if (worst && (!bound || *worst < *bound)) {
@@ -782,8 +912,9 @@ static bool checkReaction(classical::SubmitOp submit,
   }
   // The request left as soon as the outcomes it carries were usable.
   bool waited =
-      !readouts.empty() && latency > 0 && *bound - duration - budget <= latency;
-  diagnostic << "its answer is due " << *bound << " cycles after "
+      !readouts.empty() && latency > 0 &&
+      wideAdd(*bound, -wideAdd(Wide(duration), Wide(budget))) <= latency;
+  diagnostic << "its answer is due " << wideText(*bound) << " cycles after "
              << (readouts.empty() ? "the submission starts"
                                   : "the readouts it carries end");
   if (waited)
@@ -791,7 +922,8 @@ static bool checkReaction(classical::SubmitOp submit,
                << " of them the feedback latency before the request can "
                   "leave)";
   diagnostic << ", but reaction_deadline_ns allows " << limit << " (slack "
-             << limit - *bound << "); " << (waited ? "" : "submit it sooner, ")
+             << wideText(wideAdd(Wide(limit), -*bound)) << "); "
+             << (waited ? "" : "submit it sooner, ")
              << "lower max_latency_ns, use a faster link or raise "
                 "reaction_deadline_ns";
   return false;
@@ -814,8 +946,10 @@ static mlir::LogicalResult checkClassicalCalls(mlir::ModuleOp module,
   llvm::StringMap<std::optional<double>> uncertainty;
   if (controllers.enabled()) {
     pulse::AllocationTracer trace;
+    classical::TakersByValue takers;
     module.walk([&](classical::SubmitOp submit) {
-      auto found = classical::callUncertaintyNs(submit, controllers, trace);
+      auto found =
+          classical::callUncertaintyNs(submit, controllers, trace, takers);
       auto [it, inserted] = uncertainty.try_emplace(submit.getCallee(), found);
       if (!inserted && it->second)
         it->second = found
@@ -883,9 +1017,14 @@ static mlir::LogicalResult checkClassicalCalls(mlir::ModuleOp module,
       });
     }
     // S7: each answer is taken no earlier than it is due. Start times are
-    // affine in the iteration, so checking the corners of the iteration
-    // box covers every iteration. The walk also finds whether the function
-    // has a branch.
+    // affine in the iteration, so the time between the two is least at a
+    // corner of the iteration box: per loop, at its last iteration where
+    // the time shrinks with it. Only when that least is negative is a
+    // corner named: the first one that fails with the outermost loop
+    // changing fastest, found a loop at a time from the innermost, each
+    // kept at its first iteration while the loops outside it can still
+    // make the time negative. The walk also finds whether the function has
+    // a branch.
     bool branches = false;
     function.walk([&](mlir::Operation *op) {
       if (mlir::isa<mlir::scf::IfOp>(op)) {
@@ -922,27 +1061,47 @@ static mlir::LogicalResult checkClassicalCalls(mlir::ModuleOp module,
       int64_t duration = pulse::scheduledDuration(submit).value_or(1);
       int64_t budget = classical::intAttr(submit, "classical.budget_cycles");
       size_t depth = loops.size();
-      llvm::SmallVector<int64_t, 2> iteration(depth, 0);
-      for (uint64_t corner = 0; corner < (uint64_t{1} << depth); ++corner) {
-        bool empty = false;
-        for (size_t level = 0; level < depth; ++level) {
-          int64_t trips = pulse::constantTripCount(loops[level]).value_or(0);
-          empty |= trips == 0;
-          iteration[level] = (corner >> level) & 1 ? trips - 1 : 0;
-        }
-        if (empty)
+      llvm::SmallVector<int64_t, 4> last(depth);
+      for (size_t level = 0; level < depth; ++level) {
+        int64_t trips = pulse::constantTripCount(loops[level]).value_or(0);
+        if (trips == 0)
           return;
-        int64_t due =
-            *pulse::scheduledStart(submit, iteration) + duration + budget;
-        int64_t taken = *pulse::scheduledStart(wait, iteration);
-        if (taken < due) {
-          wait.emitError("the answer of '")
-              << wait.getCallee() << "' is taken at " << taken
-              << ", before it is due at " << due;
-          failed = true;
-          return;
-        }
+        last[level] = trips - 1;
       }
+      llvm::ArrayRef<int64_t> sent =
+          depth ? pulse::periodCycles(submit) : llvm::ArrayRef<int64_t>();
+      llvm::ArrayRef<int64_t> took =
+          depth ? pulse::periodCycles(wait) : llvm::ArrayRef<int64_t>();
+      Wide due = wideAdd(Wide(*pulse::startCycles(submit)),
+                         wideAdd(Wide(duration), Wide(budget)));
+      Wide taken = *pulse::startCycles(wait);
+      // What the last iteration of each loop adds to the time between,
+      // and the least the loops outside a level can add together.
+      llvm::SmallVector<Wide, 4> adds(depth), outside(depth);
+      Wide least = 0;
+      for (size_t level = 0; level < depth; ++level) {
+        outside[level] = least;
+        adds[level] =
+            wideMul(wideAdd(periodAt(took, level), -periodAt(sent, level)),
+                    Wide(last[level]));
+        if (adds[level] < 0)
+          least = wideAdd(least, adds[level]);
+      }
+      Wide between = wideAdd(taken, -due);
+      if (wideAdd(between, least) >= 0)
+        return;
+      for (size_t level = depth; level-- > 0;) {
+        if (wideAdd(between, outside[level]) < 0)
+          continue;
+        between = wideAdd(between, adds[level]);
+        taken =
+            wideAdd(taken, wideMul(periodAt(took, level), Wide(last[level])));
+        due = wideAdd(due, wideMul(periodAt(sent, level), Wide(last[level])));
+      }
+      wait.emitError("the answer of '")
+          << wait.getCallee() << "' is taken at " << wideText(taken)
+          << ", before it is due at " << wideText(due);
+      failed = true;
     });
 
     Submissions submissions{summarizeFrom};
@@ -953,10 +1112,25 @@ static mlir::LogicalResult checkClassicalCalls(mlir::ModuleOp module,
     else
       submissions.collect<false>(body, iteration, false);
     failed |= submissions.failed;
+    // A call whose last execution in a loop would start or end past what
+    // 64 bits count is no schedule: it is reported, and its link's calls
+    // are not counted or ordered from times that do not exist.
+    for (auto &[key, runs] : submissions.perLink)
+      for (const Run &run : runs)
+        if (!fits(run)) {
+          run.op->emitError("the call of '")
+              << mlir::cast<classical::SubmitOp>(run.op).getCallee()
+              << "' starts at " << run.start << " and " << run.period
+              << " cycles later in each of " << run.count
+              << " iterations: the last is past the cycles a schedule counts "
+                 "in";
+          failed = true;
+          break;
+        }
     // S8: requests in flight at once.
     for (auto &[key, runs] : submissions.perLink) {
       auto [device, instance, timeline] = key;
-      if (runs.empty())
+      if (runs.empty() || !llvm::all_of(runs, fits))
         continue;
       int64_t capacity =
           classical::intAttr(runs.front().op, "classical.slots", 64);
@@ -980,17 +1154,9 @@ static mlir::LogicalResult checkClassicalCalls(mlir::ModuleOp module,
     }
     // S9: one submission at a time on a link, in program order.
     for (auto &[key, runs] : submissions.ordered) {
-      std::optional<OutOfOrder> found;
-      if (llvm::all_of(runs, fits)) {
-        found = firstOutOfOrder(runs);
-      } else {
-        std::vector<Run> each;
-        for (const Run &run : runs)
-          for (int64_t k = 0; k < run.count; ++k)
-            each.push_back({run.start + k * run.period, 0, 1, run.duration,
-                            run.busy, -1, run.op});
-        found = firstOutOfOrder(each);
-      }
+      if (!llvm::all_of(runs, fits))
+        continue;
+      std::optional<OutOfOrder> found = firstOutOfOrder(runs);
       if (found) {
         found->op->emitError("submission on link ")
             << std::get<0>(key) << " starts at " << found->start
@@ -1022,7 +1188,8 @@ struct PulseClassicalCheckPass
 
   void runOnOperation() override {
     if (mlir::failed(checkClassicalCalls(getOperation(), kSummarizedTrips,
-                                         readoutLatency)))
+                                         readoutLatency)) ||
+        mlir::failed(pulse::checkWaitLimits(getOperation())))
       signalPassFailure();
   }
 
@@ -1051,7 +1218,8 @@ struct PulseClassicalCheckOptionsPass
   }
   void runOnOperation() override {
     if (mlir::failed(checkClassicalCalls(getOperation(), summarizeTrips,
-                                         readoutLatency)))
+                                         readoutLatency)) ||
+        mlir::failed(pulse::checkWaitLimits(getOperation())))
       signalPassFailure();
   }
 

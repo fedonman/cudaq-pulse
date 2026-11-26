@@ -8,6 +8,8 @@ get_property(conversion_libs GLOBAL PROPERTY MLIR_CONVERSION_LIBS)
 
 add_llvm_executable(cudaq-pulse-opt
   cudaq-pulse-opt.cpp
+  # The pulse-broadcast-lines pass, which registers itself (transforms/).
+  $<TARGET_OBJECTS:CudaqPulseBroadcastLines>
 )
 
 # --version prints the package's version (cmake/CudaqPulseVersion.cmake) and

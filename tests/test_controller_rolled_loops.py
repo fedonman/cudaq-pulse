@@ -236,12 +236,18 @@ def test_a_rolled_loop_of_10_15_iterations_is_checked_in_bounded_time_and_memory
     assert _in_a_child("drives", 10**15) == {"ops": 5}
 
 
-def _given(limit: int | None, schedule: str, qudits: int) -> str:
+def _given(limit: int | None, schedule: str, qudits: int, placed: bool = True) -> str:
     """Child code compiling with *schedule* for one controller and, unless
-    ``None``, a ``max_concurrent_drives`` of *limit*."""
+    ``None``, a ``max_concurrent_drives`` of *limit*; unless *placed*, asap
+    and alap keep the schedule they place past the limit (the check alone)."""
     given = "" if limit is None else f", max_concurrent_drives={limit}"
     return (
-        "from cudaq_pulse import ControlSystem\n"
+        (
+            ""
+            if placed
+            else "import cudaq_pulse.compiler\ncudaq_pulse.compiler._PLACED_BY_LIMITS.clear()\n"
+        )
+        + "from cudaq_pulse import ControlSystem\n"
         f"options = {{'schedule': '{schedule}', 'control_system': ControlSystem("
         f"controllers=[Controller()]{given})}}\n"
         f"handles = tuple(Q[:{qudits}])"
@@ -259,11 +265,13 @@ def test_rolled_loops_of_10_15_iterations_are_held_to_concurrency_limits_in_boun
     # another loop or a long pulse, in one arm of a branch.
     plain = _in_a_child(kernel, 10**15, system=_given(None, "asap", qudits))
     assert _in_a_child(kernel, 10**15, system=_given(2, "asap", qudits)) == plain
-    over = _in_a_child(kernel, 10**15, system=_given(1, "asap", qudits))
+    over = _in_a_child(kernel, 10**15, system=_given(1, "asap", qudits, placed=False))
     assert over["count"] == 1
     assert f"2 drives play at once from cycle {first}; the control system plays at most 1" in str(
         over["message"]
     )
+    # Compiled, it is placed as rcp places it, in bounds too.
+    assert "ops" in _in_a_child(kernel, 10**15, system=_given(1, "asap", qudits))
 
 
 @pytest.mark.parametrize(

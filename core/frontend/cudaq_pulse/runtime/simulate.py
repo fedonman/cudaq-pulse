@@ -38,7 +38,7 @@ from .._errors import (
 )
 from .._native._cudaq_pulse_native import evaluate_callback
 from .._units import Time, as_nanoseconds
-from ..compiler import ScheduledEvent
+from ..compiler import _LISTED_EVENTS, ScheduledEvent
 from . import _propagate
 from ._attributes import _VALID_INTEGRATORS, _f64, _level_attributes, _target_attributes
 
@@ -659,20 +659,51 @@ def _simulation_model(target: Any) -> Callable[..., SimulationResult]:
 
 
 def _check_quantum_system(lowered: ScheduledKernel, quantum_system: Any) -> Any:
-    """The description of *quantum_system*, which defines every qudit of *lowered*."""
+    """The description of *quantum_system*, which defines every qudit of
+    *lowered* and measures its frequencies from what the program's are
+    measured from."""
     from .._device import QuantumSystem
 
     if not isinstance(quantum_system, QuantumSystem):
         raise InvalidTypeError(
             f"quantum_system must be a QuantumSystem, got {type(quantum_system).__name__}"
         )
-    quantum_system = quantum_system._description
-    missing = [q for q in lowered.qudits if q not in quantum_system.qudits]
-    if missing:
-        raise InvalidValueError(
-            f"the quantum system does not define qudits {missing} that the program uses"
-        )
-    return quantum_system
+    if quantum_system._tables[0] <= max(lowered.qudits):
+        # A system no program was compiled for: its frequency tables are
+        # made, which refuses a readout frequency it cannot read.
+        quantum_system._frequency_tables(max(lowered.qudits) + 1)
+    description = quantum_system._description
+    for qudit in lowered.qudits:
+        if qudit not in description.qudits:
+            missing = [q for q in lowered.qudits if q not in description.qudits]
+            raise InvalidValueError(
+                f"the quantum system does not define qudits {missing} that the program uses"
+            )
+    if description._frame != lowered.quantum_system._description._frame:
+        raise _frames_differ(lowered.quantum_system._description, description)
+    return description
+
+
+# What the frequencies of a system of each frequency_frame are.
+_FRAMES = {
+    "absolute": "its qudits give their frequencies",
+    "shared_reference": "its frequencies are offsets from a reference its qudits share",
+    "own_carrier": "each of its tones is an offset from its own qudit's carrier",
+}
+
+
+def _frames_differ(compiled: Any, simulated: Any) -> InvalidValueError:
+    """The refusal of a program compiled for *compiled* on *simulated*, a
+    system whose frequencies are measured from something else: the tones
+    would be numbers in one frame played on qudits in another."""
+    ours, theirs = compiled._frame, simulated._frame
+    return InvalidValueError(
+        f"the program was compiled for quantum system {compiled.name!r}, whose frequency_frame "
+        f"is {ours!r} ({_FRAMES[ours]}), and quantum_system= is {simulated.name!r}, whose "
+        f"frequency_frame is {theirs!r} ({_FRAMES[theirs]}): the program's tones would be read "
+        "against qudit frequencies measured from something else. Simulate it on a system of the "
+        f"same frequency_frame, or compile the kernel for {simulated.name!r}"
+    )
 
 
 _DEFAULT_STEP_NS = 0.05
@@ -696,7 +727,7 @@ def _default_step(
         for c in compiled.couplings:
             a, b = c.qudits
             if a in active and b in active:
-                detuning = abs(qudits[a].frequency_hz - qudits[b].frequency_hz)
+                detuning = abs(qudits[a]._frame_hz - qudits[b]._frame_hz)
                 if detuning > fastest:
                     fastest = detuning
     step = _DEFAULT_STEP_NS
@@ -750,7 +781,7 @@ def _fastest(
     for c in target.couplings:
         a, b = c.qudits
         if a in active and b in active:
-            detuning = abs(qudits[a].frequency_hz - qudits[b].frequency_hz)
+            detuning = abs(qudits[a]._frame_hz - qudits[b]._frame_hz)
             if detuning > fastest:
                 fastest, source = detuning, ("coupling", a, b)
     return fastest, source
@@ -763,7 +794,7 @@ _MAX_HZ_NS = 1e9 / _STEPS_PER_PERIOD * (1 + 1e-9)
 def _level_offsets_hz(model: Any, qudit: Any, levels: int) -> list[float]:
     """Each level's energy less that of evenly spaced levels at the 0-1
     frequency: the frequency it turns at in the qudit's frame."""
-    f01 = qudit.frequency_hz
+    f01 = qudit._frame_hz
     return [e - k * f01 for k, e in enumerate(model.energies_hz(qudit, levels))]
 
 
@@ -946,13 +977,25 @@ def _simulate_compiled(
 
     path_end = t_end is None and bool(functions)
     if t_end is None:
-        events = [ScheduledEvent(*e) for e in module.events()]
-        ends = [
-            e.start_cycles + e.duration_cycles
-            for e in events
-            if e.start_cycles is not None and e.duration_cycles is not None
-        ]
-        t_end = max(ends, default=0) / clock_ghz
+        # The latest end of the events that have a start and a length. Past
+        # _LISTED_EVENTS of them a loop kept as a loop comes as a loop, whose
+        # latest end is that of its last iteration: its events are not
+        # listed once per iteration.
+        events = module.event_tree(_LISTED_EVENTS)
+        if events.__class__ is list:
+            ends = [
+                start + length
+                for _, _, _, start, length in events
+                if start is not None and length is not None
+            ]
+            latest = max(ends, default=0)
+        else:
+            from .._loops import Schedule
+
+            end = Schedule(events[0], ScheduledEvent).latest_end(timed_only=True)
+            assert end is not None
+            latest = end
+        t_end = latest / clock_ghz
     if t_end < t_start:
         raise InvalidValueError(f"t_end ({t_end}) must not precede t_start ({t_start})")
 
@@ -1499,6 +1542,12 @@ def _active_ranges(
     return merged
 
 
+# Past this many ranges of steps on which drive terms play, each range is
+# stepped with its own terms alone (_Stepper.play_apart). Up to it, asking
+# every term in every range costs no more than sorting the terms into
+# their ranges does.
+_APART_RANGES = 3
+
 # A driven stretch of a register too large for kept maps builds the
 # Hamiltonians of its steps (three per step) in parts; a part and the one
 # built after it take at most about this many bytes.
@@ -1627,6 +1676,55 @@ class _Stepper:
             rho = self._stretch(rho, values[:, pending:, :])
         return rho
 
+    def ranges(self, t0: float, steps: int) -> list[tuple[int, int]]:
+        """``_active_ranges`` of this stepper's drive terms over *steps*
+        steps from *t0*, from the supports it keeps."""
+        ranges = []
+        for support in self.supports:
+            lo, hi = _step_range(support, t0, self.h, steps)
+            if hi > lo:
+                ranges.append((lo, hi))
+        ranges.sort()
+        merged: list[tuple[int, int]] = []
+        for lo, hi in ranges:
+            if merged and lo <= merged[-1][1]:
+                merged[-1] = (merged[-1][0], max(merged[-1][1], hi))
+            else:
+                merged.append((lo, hi))
+        return merged
+
+    def play_apart(self, rho: Any, t0: float, steps: int, ranges: list[tuple[int, int]]) -> Any:
+        """All *steps* steps from *t0*: the idle stretches and each of
+        *ranges* (``ranges(t0, steps)``) in turn, as ``idle`` and ``play``
+        step them, but each range asking only its own terms.
+
+        A term's steps lie in one range, the last that starts at or before
+        them, and ``play`` adds nothing for a term outside the range it
+        steps. So a copy of this stepper that holds a range's terms alone,
+        in the order they have here, plays the range with the same
+        coefficients, added in the same order: the result is the same to
+        the last bit, and n terms in n ranges cost n evaluations where
+        asking every term in every range costs n times n tests."""
+        import copy
+        from bisect import bisect_right
+
+        starts = [lo for lo, _ in ranges]
+        members: list[list[tuple[Any, int, tuple[float, float]]]] = [[] for _ in ranges]
+        for term in zip(self.driven, self.row_of, self.supports, strict=True):
+            lo, hi = _step_range(term[2], t0, self.h, steps)
+            if hi > lo:
+                members[bisect_right(starts, lo) - 1].append(term)
+        part = copy.copy(self)
+        for (lo, hi), terms in zip(ranges, members, strict=True):
+            part.driven, part.row_of, part.supports = (
+                list(column) for column in zip(*terms, strict=True)
+            )
+            rho = part.idle(rho, lo - part.done)
+            rho = part.play(rho, t0, lo, hi)
+        rho = part.idle(rho, steps - part.done)
+        self.done = part.done
+        return rho
+
     def _stretch(self, rho: Any, values: npt.NDArray[np.float64]) -> Any:
         """RK4 over steps whose coefficients (terms x steps x 3) vary."""
         n = values.shape[1]
@@ -1743,11 +1841,16 @@ class _CpuBackend(_Backend):
             rho = step_through(stepper, self.dims, state, t0, steps, self.dt_ns)
             if rho is not None:
                 return rho
-        rho = state
-        for lo, hi in _active_ranges(driven, t0, h, steps):
-            rho = stepper.idle(rho, lo - stepper.done)
-            rho = stepper.play(rho, t0, lo, hi)
-        return stepper.idle(rho, steps - stepper.done)
+        if driven:
+            ranges = stepper.ranges(t0, steps)
+            if len(ranges) > _APART_RANGES:
+                # Drives apart from each other: each stretch of them asks
+                # only its own terms.
+                return stepper.play_apart(state, t0, steps, ranges)
+            for lo, hi in ranges:
+                state = stepper.idle(state, lo - stepper.done)
+                state = stepper.play(state, t0, lo, hi)
+        return stepper.idle(state, steps - stepper.done)
 
 
 class _GpuBackend(_Backend):

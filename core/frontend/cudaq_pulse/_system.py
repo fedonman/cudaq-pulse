@@ -95,10 +95,13 @@ class _Line(tuple[Any, ...]):
     by, and the tones it plays at once. A line reaching one qudit is
     dedicated; one reaching several is shared, and a kernel's
     ``get_drive_line(q)`` or ``get_readout_line(q)`` of any of them takes
-    one of its tones, for that qudit. A line is read-only and compares by
-    content; it is ``(qudit, delay_ns)``, or on a shared line ``(qudits,
-    max_concurrent_tones, delay_ns)``, whose item 1 is never 0, so that a
-    line whose item 1 is 0 is an undelayed dedicated one."""
+    one of its tones, for that qudit; a drive line made with
+    ``broadcast=True`` has one tone instead, which reaches all its qudits
+    at once. A line is read-only and compares by content; it is ``(qudit,
+    delay_ns)``, on a shared line ``(qudits, max_concurrent_tones,
+    delay_ns)``, and on a broadcast line ``(qudits, 1, delay_ns,
+    frequency_hz)``; item 1 of those is never 0, so that a line whose item
+    1 is 0 is an undelayed dedicated one."""
 
     __slots__ = ()
     _role: ClassVar[str]
@@ -124,6 +127,18 @@ class _Line(tuple[Any, ...]):
         @property
         def max_concurrent_tones(self) -> int:
             """The most tones it plays at once (1 on a dedicated line)."""
+            ...
+
+        @property
+        def broadcast(self) -> bool:
+            """Whether its one tone reaches all its qudits at once."""
+            ...
+
+        @property
+        def frequency_hz(self) -> float | None:
+            """The frequency a broadcast line states for its tone; ``None``
+            on any other line, and on a broadcast line that leaves it to
+            the frequency its qudits share."""
             ...
 
     else:
@@ -156,12 +171,26 @@ class _Line(tuple[Any, ...]):
             """The most tones it plays at once (1 on a dedicated line)."""
             return self[1] if len(self) > 2 else 1
 
+        @property
+        def broadcast(self):
+            """Whether its one tone reaches all its qudits at once."""
+            return len(self) > 3
+
+        @property
+        def frequency_hz(self):
+            """The frequency a broadcast line states for its tone; ``None``
+            on any other line, and on a broadcast line that leaves it to
+            the frequency its qudits share."""
+            return self[3] if len(self) > 3 else None
+
     def __new__(
         cls,
         qudits: int | Iterable[int],
         delay_ns: float | Time = 0.0,
         *,
         max_concurrent_tones: int = 1,
+        broadcast: bool = False,
+        frequency_hz: float | None = None,
     ) -> Self:
         name = cls.__name__
         if qudits.__class__ is not int:
@@ -176,7 +205,9 @@ class _Line(tuple[Any, ...]):
             if not isinstance(qudits, int):
                 from ._shared_lines import line
 
-                shared: Self = line(cls, qudits, delay_ns, max_concurrent_tones)
+                shared: Self = line(
+                    cls, qudits, delay_ns, max_concurrent_tones, broadcast, frequency_hz
+                )
                 return shared
             qudits = int(qudits)
         if qudits < 0:
@@ -218,11 +249,16 @@ class _Line(tuple[Any, ...]):
             return (line, (type(self), qudits, delay, tones))
         return (type(self), tuple(self))
 
+    def _undelayed(self) -> Self:
+        """A shared line without its delay."""
+        return type(self)(self[0], max_concurrent_tones=self[1])
+
     def _data(self) -> int | dict[str, Any]:
         """The line as a system file holds it: its qudit, or with a delay
         ``{"qudit": 5, "delay_ns": 4.0}``; a shared line as ``{"qudits": [0,
         1, 2, 3], "max_concurrent_tones": 4, "delay_ns": 12.0}``, without
-        the defaults."""
+        the defaults; a broadcast line as ``{"qudits": [0, 1, 2],
+        "broadcast": true, "frequency_hz": 5.1e9}``."""
         try:
             qudit, delay = self
         except ValueError:
@@ -235,7 +271,21 @@ class _Line(tuple[Any, ...]):
 class DriveLine(_Line):
     """A drive line of a controller (``Controller.drive_lines``); see
     ``ReadoutLine``. A bare carrier index in ``drive_lines`` is an undelayed
-    ``DriveLine``."""
+    ``DriveLine``. A line whose one tone reaches several qudits at once is a
+    broadcast line: ``DriveLine([0, 1, 2], broadcast=True)``. A kernel gets
+    it with ``get_drive_line(q)`` of any of its qudits or with
+    ``get_drive_line(a, b, c)`` of all of them, and a drive on it drives
+    every one. Its tone starts at ``frequency_hz``
+    (``DriveLine([0, 1, 2], broadcast=True, frequency_hz=5.1e9)``), which
+    may be left out when its qudits share one frequency; each qudit is
+    driven off resonance by the difference from its own. Where the qudits
+    give an ``Offset`` from one reference, the tone is the ``Offset`` they
+    share and ``frequency_hz`` is not taken; where they give no frequency,
+    the tone is at the carrier of each qudit the line reaches, a change of
+    its frequency in a kernel is that offset from each, and ``frequency_hz``
+    is not taken. Both keywords are
+    for a list of qudits: with one qudit given as an int they are ignored,
+    and ``DriveLine([0], broadcast=True)`` is an error."""
 
     __slots__ = ()
     _role = "drive"
@@ -410,19 +460,24 @@ def _lines(value: Iterable[Any], name: str, cls: type[_Line]) -> tuple[Any, ...]
     for line in given:
         if line.__class__ is not cls:
             if isinstance(line, _Line):
-                raise InvalidTypeError(
-                    f"Controller.{name} holds {cls.__name__}s or carrier indices, got {line!r}"
-                )
-            if isinstance(line, bool) or not isinstance(line, int):
-                raise InvalidTypeError(
-                    f"Controller.{name} names a line by the carrier index of its qudit, "
-                    f"or as {cls.__name__}(qudit, delay_ns=...), or a line reaching several "
-                    f"qudits as {cls.__name__}([0, 1, 2, 3], max_concurrent_tones=...), "
-                    f"got {line!r}"
-                )
-            if line < 0:
-                raise InvalidValueError(f"Controller.{name} has a negative carrier index {line}")
-            line = tuple.__new__(cls, (int(line), 0.0))
+                # A broadcast line is of a class of its own (_broadcast_lines).
+                if not isinstance(line, cls):
+                    raise InvalidTypeError(
+                        f"Controller.{name} holds {cls.__name__}s or carrier indices, got {line!r}"
+                    )
+            else:
+                if isinstance(line, bool) or not isinstance(line, int):
+                    raise InvalidTypeError(
+                        f"Controller.{name} names a line by the carrier index of its "
+                        f"qudit, or as {cls.__name__}(qudit, delay_ns=...), or a line "
+                        f"reaching several qudits as {cls.__name__}([0, 1, 2, 3], "
+                        f"max_concurrent_tones=...), got {line!r}"
+                    )
+                if line < 0:
+                    raise InvalidValueError(
+                        f"Controller.{name} has a negative carrier index {line}"
+                    )
+                line = tuple.__new__(cls, (int(line), 0.0))
         lines.append(line)
     carriers = list(map(_QUDIT, lines))
     if not _PLAIN.issuperset(map(type, carriers)):
@@ -762,14 +817,21 @@ class Controller:
     program grows past the limit, and the error names the loop that
     unrolled it. Exports list it among the limits only when it is set.
     ``max_program_duration``: the longest program the controller runs, a
-    time or a number of ns (``None``: no limit); the compiler sums the
-    program op after op, every iteration of its loops, and a program longer
-    than that is a compile error at the op or loop that passes it (a wait
-    whose length floats set, at the call). The scheduled program, to the
-    end of its last operation on the controller's lines (line delays and
-    the waits for feedback, lines and links included), is checked against
-    it too, on one controller or several. Without it, a program may last
-    up to 2**60 cycles. Exports list it only when it is set.
+    time or a number of ns (``None``: no limit). The scheduled program,
+    to the end of its last operation on the controller's lines (line delays
+    and the waits for feedback, lines and links included), is checked
+    against it, on one controller or several, so operations that play
+    together on different lines count once; a longer one is a compile error
+    giving its length (with a wait whose length floats set, an error at the
+    call). A wait whose length is known only when the program runs counts at
+    its highest length for the lines it holds back, and is a compile error
+    where it has no highest, as is a blocking classical call that an
+    operation on those lines follows. When the module is built the compiler
+    also sums the
+    traced program op after op, every iteration of its loops, and refuses it
+    where the sum passes the limit times the lines the program takes: no
+    schedule of it fits then. Without the limit, a program may last up to
+    2**60 cycles. Exports list it only when it is set.
     ``max_fine_delay_ns``: the longest delay, below one grid step, each line
     can add to its output (0: none), a time or a number of ns; it plays the
     part of a line's calibrated delay (``DriveLine``, ``ReadoutLine``) that
@@ -1349,8 +1411,12 @@ class ControlSystem:
         _lines_up: bool = field(init=False)
         # The indices of the controllers that block on calls.
         _blocking: tuple[int, ...] = field(init=False)
-    # Whether a line reaches several qudits (_shared_lines); set only then.
-    _shares = False
+        _shares: ClassVar[Any]
+    else:
+        # False, or with a line that reaches several qudits what writes its
+        # programs' exports: the _shared_lines module, or with a broadcast
+        # line _broadcast_lines; set only then. Not a field.
+        _shares = False
 
     def __post_init__(self) -> None:
         from .compiler import _NO_DELAYS, _MachineModel
@@ -1400,8 +1466,9 @@ class ControlSystem:
             # A shared line: each of its qudits gets its controller and delay.
             from ._shared_lines import tables
 
-            owners, delays = tables(controllers)
-            object.__setattr__(self, "_shares", True)
+            # With a broadcast line, the model that compiles for one.
+            owners, delays, shares, _MachineModel = tables(controllers, _MachineModel)  # type: ignore[misc]  # noqa: N806
+            object.__setattr__(self, "_shares", shares)
             repeated = False
         else:
             delays = {
@@ -2057,9 +2124,7 @@ class ControlSystem:
 
         owners, found = self._owners(lines)
         if self._shares:
-            from . import _shared_lines
-
-            found.extend(_shared_lines.violations(self, lowered, lines, events, unresolved))
+            found.extend(self._shares.violations(self, lowered, lines, events, unresolved))
         if len(self.controllers) == 1:
             found.extend(
                 _violations(
@@ -2279,9 +2344,7 @@ class ControlSystem:
         if self._needs(lowered, events, owners, unresolved):
             return None
         if self._shares:
-            from . import _shared_lines
-
-            shared = _shared_lines.summarized(
+            shared = self._shares.summarized(
                 self, lowered, lines, events, repeats, unresolved, periods
             )
             if shared is None:
@@ -2946,12 +3009,12 @@ def _plain(value: Any) -> Any:
     return value
 
 
-def _component_kinds() -> dict[str, dict[str, type[Any]]]:
+def _component_kinds() -> dict[str, Mapping[str, type[Any]]]:
     """The modality components of a qudit a system file holds, by the member
     they set and the kind it writes."""
-    from .quantum_systems.base import DispersiveReadout, MicrowaveDrive
+    from .quantum_systems.base import _DRIVE_KINDS, DispersiveReadout
 
-    return {"drive": {"microwave": MicrowaveDrive}, "readout": {"dispersive": DispersiveReadout}}
+    return {"drive": _DRIVE_KINDS, "readout": {"dispersive": DispersiveReadout}}
 
 
 def _component_data(member: str, component: Any) -> dict[str, Any] | None:
@@ -3036,6 +3099,25 @@ def _quantum_data(target: _Description) -> dict[str, Any]:
     }
 
 
+# A qudit's readout as a file holds it, a readout's frequency, the types
+# of a frequency in Hz (or of none given; _device adds a float type it has
+# looked at, as numpy.float64), and whether some types are all among them.
+_READOUT = itemgetter("readout")
+_READOUT_HZ = itemgetter("frequency_hz")
+_HZ_TYPES = {float, int, type(None)}
+_ONLY_HZ = _HZ_TYPES.issuperset
+
+
+def _write_offsets(qudits: list[dict[str, Any]]) -> None:
+    """The frequency of each of a file's *qudits*, and of its readout if it
+    gives one, each an ``Offset``, written as the file holds one."""
+    for qudit in qudits:
+        qudit["frequency_hz"] = {"offset_hz": float(qudit["frequency_hz"])}
+        readout = qudit.get("readout")
+        if readout is not None and readout.get("frequency_hz") is not None:
+            readout["frequency_hz"] = {"offset_hz": float(readout["frequency_hz"])}
+
+
 def _device_data(quantum_system: QuantumSystem) -> dict[str, Any]:
     import json
 
@@ -3048,7 +3130,19 @@ def _device_data(quantum_system: QuantumSystem) -> dict[str, Any]:
     data["name"] = spec if spec is not None else base.name
     if spec is None:
         data |= _quantum_data(base)
+        # One look per file: qudits whose frequencies are offsets from a
+        # shared reference are written as {"offset_hz": value}.
+        if base._frame == "shared_reference":
+            _write_offsets(data["qudits"])
+        elif not _ONLY_HZ(map(type, map(_READOUT_HZ, filter(None, map(_READOUT, data["qudits"]))))):
+            # A readout frequency that is no float: an Offset among qudits
+            # with frequencies in Hz is refused, as a compile refuses it.
+            from ._device import _offset_readouts_in_file
+
+            _offset_readouts_in_file(quantum_system, base)
     data["layout"] = list(quantum_system.layout)
+    if base.frames != "dressed":
+        data["frames"] = base.frames
     if spec is None or quantum_system.clock_ghz != base.clock_ghz:
         data["clock_ghz"] = quantum_system.clock_ghz
     calibration = quantum_system.calibration
@@ -3357,7 +3451,7 @@ class _Reader:
         if not isinstance(data, Mapping):
             return data
         if "qudits" in data:
-            known = ("qudits", "max_concurrent_tones", "delay_ns")
+            known = ("qudits", "max_concurrent_tones", "delay_ns", "broadcast", "frequency_hz")
             entry = self.mapping(data, path, known)
             if entry is None:
                 return None

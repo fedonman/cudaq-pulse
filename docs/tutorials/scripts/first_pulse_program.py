@@ -131,7 +131,7 @@ print(scheduled.mlir())
 #       %c64_i64 = arith.constant 64 : i64
 #       %0 = pulse.qudit_alloc {qudit = 0 : i64} : !pulse.qudit
 #       %line, %tone = pulse.get_drive_line %0
-#           {frequency_hz = 3.885000e+09 : f64}
+#           {frequency_hz = 3884968867.2938495 : f64}
 #           : (!pulse.qudit) -> (!pulse.drive_line, !pulse.tone)
 #       %line_3, %tone_4 = pulse.get_readout_line %0
 #           {frequency_hz = 6.769000e+09 : f64}

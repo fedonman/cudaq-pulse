@@ -151,6 +151,19 @@ def play_arity_error(fname: str, count: int) -> CompilationError:
     return CompilationError(message, code="wrong_argument")
 
 
+def no_broadcast_line(count: int) -> CompilationError:
+    """The error for ``get_drive_line`` given *count* qudits when the control
+    system has no broadcast drive line."""
+    return CompilationError(
+        f"get_drive_line() got {count} qudits: several qudits name a broadcast drive "
+        "line, which reaches all of them with one tone, and the control system this "
+        "kernel is compiled for has none",
+        code="control_system",
+        fix="declare the line, as DriveLine([0, 1, 2], broadcast=True) in the "
+        "controller's drive_lines, or get each qudit's own line with get_drive_line(q)",
+    )
+
+
 def range_error(args: list[Any]) -> CompilationError:
     choice = _find_choice(args)
     if choice is not None:

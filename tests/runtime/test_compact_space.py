@@ -11,15 +11,31 @@ import dataclasses
 import cudaq_pulse as pulse
 import numpy as np
 import pytest
+from cudaq_pulse.quantum_systems.base import layout_anharmonicities, layout_frequencies
 
 _TRANSMON_SURFACE17 = pulse.quantum_system("transmon_surface17")
 
 
 def _slice(indices):
     """A quantum system of the transmon_surface17 qudits *indices*, renumbered 0, 1, ... in
-    increasing order, with the couplings and residual ZZ between them."""
+    increasing order, with the couplings and residual ZZ between them. Each
+    qudit is at the frequency, and the anharmonicity, its left-out
+    neighbours dress it to, as when transmon_surface17 simulates those
+    qudits (dressed frames)."""
     target = _TRANSMON_SURFACE17
     new = {q: i for i, q in enumerate(sorted(indices))}
+    moved = layout_frequencies(target._description, tuple(new))
+    # At three levels a kept qudit also keeps its left-out neighbours' share
+    # of its 1-2 transition.
+    alphas = layout_anharmonicities(target._description, tuple(new))
+
+    def carrier(q, i):
+        physical = target.physical_qudits[q].replace(index=i)
+        if q in moved:
+            physical = physical.replace(frequency_hz=moved[q])
+        if q in alphas:
+            physical = physical.replace(anharmonicity_hz=alphas[q])
+        return physical
 
     def renumbered(entries, replace):
         return [
@@ -30,7 +46,7 @@ def _slice(indices):
 
     sliced = pulse.quantum_system(
         name="transmon-surface17-slice",
-        qudits={i: target.physical_qudits[q].replace(index=i) for q, i in new.items()},
+        qudits={i: carrier(q, i) for q, i in new.items()},
         couplings=renumbered(target.couplings, pulse.quantum_systems.Coupling.replace),
         residual_zz=renumbered(target.residual_zz, dataclasses.replace),
         clock_ghz=target.clock_ghz,

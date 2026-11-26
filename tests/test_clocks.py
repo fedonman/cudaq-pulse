@@ -589,6 +589,51 @@ def test_a_run_time_length_known_now_to_be_off_the_timesteps_is_a_compile_error(
     assert event["length"]["op"] == "controller_cycles"
 
 
+def test_a_run_time_length_that_names_terms_keeps_them_at_its_root():
+    select = {
+        "op": "select",
+        "type": "int",
+        "of": [
+            {"op": "ne", "type": "int", "of": [{"readout": 1}, {"const": 0}]},
+            {"const": 9},
+            {"const": 12},
+        ],
+    }
+    twice = {"op": "add", "type": "int", "of": [{"term": 0}, {"term": 0}]}
+    event = _line_event(
+        kind="wait", length={"terms": [select], **twice}, min_cycles=4, max_cycles=40
+    )
+    # Each use of the term takes either value: 18, 21 or 24 cycles.
+    [message] = _clocks.own_run_time(_HALF, _LINE, event)
+    assert "length, computed at run time, of 21 cycles" in message
+    length = event["length"]
+    assert list(length)[:2] == ["terms", "op"]
+    assert length["terms"] == [select]
+    assert length["op"] == "controller_cycles"
+    assert "terms" not in str(length["of"])
+    eights = {**select, "of": [select["of"][0], {"const": 8}, {"const": 8}]}
+    event = _line_event(kind="wait", length={"terms": [eights], **twice})
+    assert _clocks.own_run_time(_HALF, _LINE, event) == []
+    assert pulse.controller.evaluate_expression(event["length"], readouts={1: 1}) == 8
+    event = _line_event(
+        waveform={
+            "shape": "square",
+            "params": {"duration": None},
+            "runtime": {"duration": {"terms": [select], **twice}},
+        }
+    )
+    [message] = _clocks.own_run_time(_HALF, _LINE, event, True)
+    assert "waveform's duration, computed at run time, of 21 cycles" in message
+    duration = event["waveform"]["runtime"]["duration"]
+    assert list(duration)[:2] == ["terms", "op"]
+    assert duration["op"] == "controller_cycles"
+    # A chain deeper than Python nests calls.
+    deep = {"const": 4}
+    for _ in range(3000):
+        deep = {"op": "add", "type": "int", "of": [deep, {"const": 2}]}
+    assert _clocks._values(deep) == {6004}
+
+
 def test_a_run_time_operand_the_export_cannot_tell_is_a_time_is_a_compile_error():
     def unnamed():
         computed = {"0": {"answer": 0, "result": 0}}

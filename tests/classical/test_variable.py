@@ -389,3 +389,22 @@ def test_pulses_either_side_of_a_barrier_are_not_fused(barrier):
     spectator = [e for e in low.schedule if e.kind == "drive" and e.qudit == 1]
     assert [e.end - e.start for e in spectator] == [400, 30]
     assert spectator[1].start >= low.segments()[-1].start_cycles
+
+
+def test_a_loop_that_hands_each_answer_to_the_next_call_compiles():
+    """The length of each wait is looked for once, however many calls came
+    before it: the loop is written out, and each call takes the answer of the
+    one before."""
+
+    @pulse.kernel
+    def adaptive(q, tau0: float):
+        d = get_drive_line(q)
+        tau = tau0
+        for _ in range(60):
+            tau = next_tau.submit(tau).result()
+            drive(d, square(40, 0.1))
+            wait(d, tau, bounds=(16, 4000))
+
+    for policy in POLICIES:
+        text = _mlir(adaptive, Q[0], 10.0, schedule=policy)
+        assert text.count("classical.variable") == 60

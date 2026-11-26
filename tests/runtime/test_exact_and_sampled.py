@@ -267,3 +267,148 @@ def test_kept_propagators_are_keyed_compactly():
     # A key names a stretch by a digest of its coefficients, whatever its
     # length: the cache would otherwise hold every stretch's samples.
     assert sizes and max(sizes) <= 1024
+
+
+@pulse.kernel
+def _pulses_apart(q0):
+    # Written out: a loop's pulses would be one term, a train.
+    d = get_drive_line(q0)
+    drive(d, square(24, _PI / 2))
+    wait(d, 40)
+    shift_phase(d.tone, 0.3)
+    drive(d, gaussian(60, _PI, 15))
+    wait(d, 24)
+    drive(d, square(24, _PI / 4))
+    wait(d, 36)
+    shift_frequency(d.tone, 3e6)
+    drive(d, gaussian(48, _PI / 2, 12))
+    wait(d, 28)
+    # Two that touch, and one after them.
+    drive(d, drag(40, _PI, 10, 0.4))
+    drive(d, square(16, _PI / 3))
+    wait(d, 32)
+    drive(d, square(8, _PI))
+
+
+@pulse.kernel
+def _lines_apart(q0, q1):
+    # Two lines at once, one longer than the other, then both idle.
+    d0 = get_drive_line(q0)
+    d1 = get_drive_line(q1)
+    drive(d0, gaussian(24, _PI, 6))
+    drive(d1, square(40, _PI / 2))
+    sync(d0, d1)
+    wait(d0, 30)
+    sync(d0, d1)
+    drive(d0, square(40, _PI / 3))
+    drive(d1, gaussian(24, _PI, 6))
+    sync(d0, d1)
+    wait(d0, 26)
+    sync(d0, d1)
+    drive(d1, drag(32, _PI, 8, 0.4))
+    sync(d0, d1)
+    wait(d1, 34)
+    sync(d0, d1)
+    drive(d0, square(16, _PI))
+    drive(d1, square(16, _PI / 2))
+    sync(d0, d1)
+    wait(d0, 30)
+    sync(d0, d1)
+    drive(d0, gaussian(36, _PI / 2, 9))
+
+
+def _two_qudits():
+    return pulse.quantum_system(
+        name="propagation-test-pair",
+        qudits={
+            q: PhysicalQudit(
+                index=q,
+                frequency_hz=5.0e9 + 0.3e9 * q,
+                anharmonicity_hz=-200.0e6,
+                t1_us=30.0,
+                t2_star_us=20.0,
+                drive=MicrowaveDrive(amplitude_scale_rad_per_ns=1.0),
+            )
+            for q in range(2)
+        },
+    )
+
+
+@pytest.mark.parametrize("stepping", ["exact and maps", "maps", "rk4"])
+@pytest.mark.parametrize("levels", [2, 3])
+@pytest.mark.parametrize("program", ["one line", "two lines"])
+def test_drives_apart_step_with_their_own_terms_to_the_same_bits(
+    program, levels, stepping, monkeypatch
+):
+    """Past ``_APART_RANGES`` stretches of drives, each stretch is stepped
+    with its own terms alone. A term adds nothing outside its stretch and
+    the terms of a stretch add in the order they have, so the density
+    matrix is the one that asking every term in every stretch gives, bit
+    for bit: whether stretches are propagated exactly, by kept maps or by
+    RK4 on the state."""
+    if program == "one line":
+        lowered = on(_target(), _pulses_apart, Q[0])
+    else:
+        lowered = on(_two_qudits(), _lines_apart, Q[0], Q[1])
+    stepper = simulate_module._Stepper
+    play_apart, play = stepper.play_apart, stepper.play
+    apart: list[int] = []
+    asked: list[int] = []
+
+    def counting_apart(self, rho, t0, steps, ranges):
+        apart.append(len(ranges))
+        return play_apart(self, rho, t0, steps, ranges)
+
+    def counting(self, rho, t0, lo, hi):
+        asked.append(len(self.driven))
+        return play(self, rho, t0, lo, hi)
+
+    # To the end, and to the middle of a pulse of the fourth stretch.
+    for window in ({}, {"t_end": 105.0}):
+        results, terms_asked = [], []
+        for limit in (simulate_module._APART_RANGES, 10**9):
+            apart.clear()
+            asked.clear()
+            with monkeypatch.context() as m:
+                m.setattr(simulate_module, "_APART_RANGES", limit)
+                m.setattr(stepper, "play_apart", counting_apart)
+                m.setattr(stepper, "play", counting)
+                results.append(
+                    _simulated(
+                        lowered,
+                        m,
+                        maps=stepping != "rk4",
+                        exact=stepping == "exact and maps",
+                        levels=levels,
+                        **window,
+                    )
+                )
+            terms_asked.append(sum(asked))
+            # Each stretch asks its own terms alone, or every stretch asks all.
+            assert bool(apart) == (limit == simulate_module._APART_RANGES)
+            if apart:
+                assert max(apart) > simulate_module._APART_RANGES
+        own, every = results
+        assert own.dtype == every.dtype and own.shape == every.shape
+        assert own.tobytes() == every.tobytes()
+        assert terms_asked[0] * 3 < terms_asked[1]
+
+
+def test_up_to_three_stretches_of_drives_ask_every_term(monkeypatch):
+    """The same steps as before for a program with few stretches."""
+
+    @pulse.kernel
+    def three(q0):
+        d = get_drive_line(q0)
+        drive(d, square(24, _PI / 2))
+        wait(d, 40)
+        drive(d, gaussian(60, _PI, 15))
+        wait(d, 24)
+        drive(d, square(8, _PI))
+
+    def refuse(*_):
+        raise AssertionError("three stretches were stepped apart")
+
+    monkeypatch.setattr(simulate_module._Stepper, "play_apart", refuse)
+    rho = pulse.simulate(on(_target(), three, Q[0]), levels=2).density_matrix
+    assert np.isclose(np.trace(rho).real, 1.0)

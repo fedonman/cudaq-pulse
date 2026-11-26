@@ -397,6 +397,23 @@ def test_a_float_parameter_in_nanoseconds_is_one_run_time_multiply():
         compiled(Q[0], 30 * ns)
 
 
+def test_a_time_in_a_run_time_list_float_is_an_error():
+    @pulse.kernel
+    def k(q, taus: list[float]):
+        d = get_drive_line(q)
+        for t in taus:
+            wait(d, t)
+
+    for lower in (k.lower, pulse.compile(k).lower):
+        with pytest.raises(pulse.InvalidTypeError, match=r"taus\[1\] is a time \(100 ns\)"):
+            lower(Q[0], [50.0, 100 * ns])
+        with pytest.raises(
+            pulse.InvalidTypeError, match=r"taus\[1\] must be a real number, not str"
+        ):
+            lower(Q[0], [50.0, "x"])
+    assert [e[2] for e in _events(k.lower(Q[0], [50.0, 100.0]))] == [50, 100]
+
+
 def test_a_list_float_element_can_be_a_duration_like_a_float_parameter():
     @pulse.kernel
     def k(q, widths: list[float]):

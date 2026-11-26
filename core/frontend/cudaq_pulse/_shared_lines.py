@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import bisect
 import math
+import sys
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, cast
 
@@ -24,6 +25,10 @@ if TYPE_CHECKING:
     from ._errors import Problem
     from ._system import Controller, ControlSystem, _Line
     from .compiler import ScheduledKernel
+
+
+# This module, as ``ControlSystem._shares`` of a system without a broadcast line.
+_MODULE = sys.modules[__name__]
 
 
 def tone_count(name: str, qudits: Any, given: Any, most: int = 1) -> int:
@@ -44,16 +49,25 @@ def tone_count(name: str, qudits: Any, given: Any, most: int = 1) -> int:
     return int(given)
 
 
-def line(cls: type[_Line], qudits: Iterable[Any], delay_ns: Any, tones: Any) -> Any:
+def line(
+    cls: type[_Line],
+    qudits: Iterable[Any],
+    delay_ns: Any,
+    tones: Any,
+    broadcast: Any = False,
+    frequency_hz: Any = None,
+) -> Any:
     """A *cls* line reaching *qudits* (a sequence of carrier indices), with
     its delay and ``max_concurrent_tones`` checked: a dedicated line when
-    it reaches one."""
+    it reaches one. With *broadcast* or a *frequency_hz*, a broadcast line
+    (``_broadcast_lines``)."""
     from ._system import _delay_ns
 
     name = cls.__name__
     given = list(qudits)
     for qudit in given:
-        if isinstance(qudit, bool) or not isinstance(qudit, int):
+        # An int is neither a bool nor another type: looked at once.
+        if qudit.__class__ is not int and (isinstance(qudit, bool) or not isinstance(qudit, int)):
             raise InvalidTypeError(
                 f"{name} reaches qudits by carrier index, got {qudit!r} in {given!r}"
             )
@@ -62,11 +76,16 @@ def line(cls: type[_Line], qudits: Iterable[Any], delay_ns: Any, tones: Any) -> 
     if not given:
         raise InvalidValueError(f"{name} reaches no qudit; give it at least one")
     reached = tuple(map(int, given))
-    if len(set(reached)) != len(reached):
+    count = len(reached)
+    if len(set(reached)) != count:
         raise InvalidValueError(f"{name}({given}) lists a qudit twice")
-    if len(reached) == 1:
+    if broadcast is not False or frequency_hz is not None:
+        from ._broadcast_lines import line as broadcast_line
+
+        return broadcast_line(cls, reached, delay_ns, tones, broadcast, frequency_hz)
+    if count == 1:
         return cls(reached[0], delay_ns, max_concurrent_tones=tones)
-    tones = tone_count(name, reached, tones, len(reached))
+    tones = tone_count(name, reached, tones, count)
     if delay_ns.__class__ is not float or not 0.0 <= delay_ns < math.inf:
         delay_ns = _delay_ns(delay_ns, f"{name}({given}).delay_ns")
     # Item 1 is the tones, never 0: _lines_data and the delay filters see it.
@@ -123,20 +142,45 @@ def _role_lines(controller: Controller) -> Iterator[tuple[str, int, _Line]]:
 
 
 def tables(
-    controllers: Sequence[Controller],
-) -> tuple[dict[tuple[str, int], int], dict[tuple[str, int], float]]:
-    """``ControlSystem._line_owners`` and the delays of its delayed lines, by
-    (role, qudit), of *controllers*: every qudit of a shared line gets its
-    controller and its delay."""
+    controllers: Sequence[Controller], model: Any
+) -> tuple[dict[tuple[str, int], int], dict[tuple[str, int], float], Any, Any]:
+    """Of *controllers*, one of which has a line reaching several qudits:
+    ``ControlSystem._line_owners`` and the delays of its delayed lines, by
+    (role, qudit), every qudit of such a line getting its controller and
+    its delay; ``ControlSystem._shares``, the module that writes the exports
+    of their programs; and the class of the model that compiles for them.
+    Those are this module and *model*, or with a broadcast line
+    ``_broadcast_lines`` and its model."""
     owners: dict[tuple[str, int], int] = {}
     delays: dict[tuple[str, int], float] = {}
+    broadcast = False
+    each: Any
     for index, controller in enumerate(controllers):
-        for role, _, each in _role_lines(controller):
-            for qudit in each.qudits:
-                owners[(role, qudit)] = index
-                if each.delay_ns:
-                    delays[(role, qudit)] = each.delay_ns
-    return owners, delays
+        for role, lines in (
+            ("drive", controller.drive_lines),
+            ("readout", controller.readout_lines),
+        ):
+            for each in lines:
+                # (qudit, delay), (qudits, tones, delay), or four items on a
+                # broadcast line.
+                if len(each) == 2:
+                    qudit, delay = each
+                    owners[(role, qudit)] = index
+                    if delay:
+                        delays[(role, qudit)] = delay
+                    continue
+                if len(each) > 3:
+                    broadcast = True
+                delay = each[2]
+                for qudit in each[0]:
+                    owners[(role, qudit)] = index
+                    if delay:
+                        delays[(role, qudit)] = delay
+    if broadcast:
+        from . import _broadcast_lines
+
+        return owners, delays, _broadcast_lines, _broadcast_lines.machine_model(model)
+    return owners, delays, _MODULE, model
 
 
 def reach_problems(system: ControlSystem, prefix: str) -> list[Problem]:
@@ -201,12 +245,7 @@ def undelayed(controllers: Sequence[Controller]) -> list[Controller]:
     import dataclasses
 
     def plain(lines: Sequence[Any]) -> list[Any]:
-        return [
-            each[0]
-            if len(each) == 2
-            else type(each)(each[0], max_concurrent_tones=each.max_concurrent_tones)
-            for each in lines
-        ]
+        return [each[0] if len(each) == 2 else each._undelayed() for each in lines]
 
     return [
         dataclasses.replace(
@@ -249,7 +288,8 @@ def physical(system: ControlSystem) -> Mapping[tuple[str, int], Physical] | None
     for owner, controller in enumerate(system.controllers):
         for lines in (controller.drive_lines, controller.readout_lines):
             for position, each in enumerate(cast("Sequence[_Line]", lines)):
-                if len(each) > 2:
+                # A broadcast line (four items) has one tone: nothing is shared.
+                if len(each) == 3:
                     shared = Physical(each, owner, position)
                     for qudit in shared.qudits:
                         found[(shared.role, qudit)] = shared
@@ -624,7 +664,14 @@ def _per_line(
     found = []
     most = controller.max_frequencies_per_line
     if most is not None:
-        tones = {e["frequency_hz"] for e in played if e.get("frequency_hz") is not None}
+        if lowered.quantum_system._description._own_carrier:
+            # Each tone is an offset from its own qudit's carrier: the tones
+            # of two qudits are two frequencies, whatever their numbers.
+            tones = {
+                (e["qudit"], e["frequency_hz"]) for e in played if e.get("frequency_hz") is not None
+            }
+        else:
+            tones = {e["frequency_hz"] for e in played if e.get("frequency_hz") is not None}
         if len(tones) > most:
             found.append(
                 f"{line.label}: {len(tones)} tone frequencies; the controller holds {most} per line"
@@ -669,7 +716,9 @@ def violations(
     *lines* and *events*, every iteration) exceed: their tones at once,
     and per physical line the limits its handles share."""
     shared = physical(system)
-    assert shared is not None
+    if shared is None:
+        # Its lines of several qudits are broadcast lines: one tone each.
+        return []
     found: list[str] = []
     sharing, of = _sharing(shared, lines)
     each: list[list[Mapping[str, Any]]] = [[] for _ in sharing]
@@ -677,15 +726,139 @@ def violations(
         k = _timed_on(e, of)
         if k is not None:
             each[k].append(e)
-    for line, played in zip(sharing, each, strict=True):
-        at_once = _AtOnce(line)
-        at_once.sweep(
-            sorted(((e["start_cycles"], e["end_cycles"], e, 0) for e in played), key=_first)
-        )
-        message = at_once.message(lines)
-        if message is not None:
-            found.append(message)
+    slid: tuple[Sequence[Mapping[str, Any]], list[list[Mapping[str, Any]]]] | None = None
+    for k, (line, played) in enumerate(zip(sharing, each, strict=True)):
+        # What follows a wait whose length is computed at run time, or a
+        # wait for an answer, starts later in a run than it is placed:
+        # tones that do not all wait together are counted as they can slide.
+        if lowered.classical and _slides_apart(played):
+            if slid is None:
+                slid = _program_tones(shared, lowered)
+            found.extend(_sliding(lowered, line, slid[1][k], slid[0]))
+        else:
+            at_once = _AtOnce(line)
+            at_once.sweep(
+                sorted(((e["start_cycles"], e["end_cycles"], e, 0) for e in played), key=_first)
+            )
+            message = at_once.message(lines)
+            if message is not None:
+                found.append(message)
         found.extend(_per_line(lowered, line, system.controllers[line.owner], played, unresolved))
+    return found
+
+
+def _slides_apart(played: Sequence[Mapping[str, Any]]) -> bool:
+    """Whether tones of *played* (those of one shared line) can slide
+    against one another: one is past the first segment, and they are not
+    all on handles that wait together."""
+    if not any(e["segment"] for e in played):
+        return False
+    from . import _slides
+
+    return not _slides.one_timeline(played)
+
+
+def _program_tones(
+    shared: Mapping[tuple[str, int], Physical], lowered: ScheduledKernel
+) -> tuple[Sequence[Mapping[str, Any]], list[list[Mapping[str, Any]]]]:
+    """The lines of a walk of every iteration in program cycles, in which
+    the segments' ranges are, and the tones of each shared line
+    (``_sharing``) in it: the events of ``violations`` may be in the cycles
+    of a controller's own clock."""
+    from .controller import _walk
+
+    lines, events, _, _, _ = _walk(lowered, values=False, waveforms=False)
+    sharing, of = _sharing(shared, lines)
+    each: list[list[Mapping[str, Any]]] = [[] for _ in sharing]
+    for e in events:
+        k = _timed_on(e, of)
+        if k is not None:
+            each[k].append(e)
+    return lines, each
+
+
+def _sliding(
+    lowered: ScheduledKernel,
+    line: Physical,
+    played: Sequence[Mapping[str, Any]],
+    lines: Sequence[Mapping[str, Any]],
+) -> list[str]:
+    """The tones *line* can play at once past its ``max_concurrent_tones``
+    in some run, when what follows each wait of a run-time length starts
+    as much later as the wait can be longer (``_slides``)."""
+    from . import _slides
+    from ._concurrency import _together
+
+    tones = sorted(((e["start_cycles"], e["end_cycles"], e) for e in played), key=_slides.by_start)
+
+    def together(active: list[Any]) -> int:
+        return _together(
+            [({(c["branch"], ()): c["arm"] for c in tone[2]["conditions"]}, 1) for tone in active]
+        )
+
+    branched = any(tone[2]["conditions"] for tone in tones)
+    found = _slides.over(lowered, tones, line.tones, lines, together if branched else None)
+    return [] if found is None else [_can_play(line, found)]
+
+
+def _can_play(line: Physical, found: Any) -> str:
+    beyond = f", and up to {found.most}" if found.most > found.at_first else ""
+    return (
+        f"{line.label} can play {found.at_first} tones at once from cycle {found.first}{beyond}: "
+        f"{found.cause}; it plays at most {line.tones} (max_concurrent_tones): sync the lines "
+        "after the wait, so that they wait together, give the wait bounds that keep them "
+        "apart, or raise its max_concurrent_tones"
+    )
+
+
+def _rolled_tones(
+    shared: Mapping[tuple[str, int], Physical], lowered: ScheduledKernel, sliding: set[int]
+) -> dict[int, list[str]] | None:
+    """By shared line of *sliding* (places in ``_sharing``), the tones it
+    can play at once past its ``max_concurrent_tones`` in some run, counted
+    from a walk in program cycles that lists three trips of each long loop
+    (``_slides.over_rolled``); ``None`` when its loops cannot be counted
+    so."""
+    from . import _slides
+    from ._concurrency import _together
+    from .controller import _walk
+
+    repeats: list[tuple[int, ...]] = []
+    periods: list[tuple[int, int, int]] = []
+    segments: list[Any] = []
+    lines, events, _, _, _ = _walk(
+        lowered, values=False, waveforms=False, summary=(repeats, periods), segments=segments
+    )
+    if periods or not segments:
+        return None
+    sharing, of = _sharing(shared, lines)
+    each: dict[int, list[Any]] = {k: [] for k in sliding}
+    for e in events:
+        k = _timed_on(e, of)
+        if k in each:
+            each[k].append((e["start_cycles"], e["end_cycles"], e))
+
+    def together(active: list[Any]) -> int:
+        return _together(
+            [({(c["branch"], ()): c["arm"] for c in tone[2]["conditions"]}, 1) for tone in active]
+        )
+
+    found: dict[int, list[str]] = {}
+    for k, tones in each.items():
+        tones.sort(key=_slides.by_start)
+        branched = any(tone[2]["conditions"] for tone in tones)
+        counted, over = _slides.over_rolled(
+            tones,
+            sharing[k].tones,
+            lines,
+            events,
+            repeats,
+            segments,
+            together if branched else None,
+        )
+        if not counted:
+            return None
+        found[k] = [] if over is None else [_can_play(sharing[k], over)]
     return found
 
 
@@ -748,24 +921,44 @@ def summarized(
     from . import _loops
 
     shared = physical(system)
-    assert shared is not None
+    if shared is None:
+        # Its lines of several qudits are broadcast lines: one tone each.
+        return []
     tree, _ = _loops._tree(events, repeats, periods)
     budget = _loops._Budget()
     found: list[str] = []
     sharing, of = _sharing(shared, lines)
+    # Tones that can slide (see ``violations``) are counted from the trips
+    # the walk lists and the rest as blocks, else from every copy.
+    slid: dict[int, list[str]] = {}
+    if lowered.classical:
+        tones: dict[int, list[Mapping[str, Any]]] = {}
+        for e in events:
+            k = _timed_on(e, of)
+            if k is not None:
+                tones.setdefault(k, []).append(e)
+        sliding = {k for k, played in tones.items() if _slides_apart(played)}
+        if sliding:
+            rolled = _rolled_tones(shared, lowered, sliding)
+            if rolled is None:
+                return None
+            slid = rolled
     split = _loops._split(tree, lambda i: _timed_on(events[i], of))
     for k, line in enumerate(sharing):
         nodes = split.get(k, [])
-        at_once = _AtOnce(line)
-        try:
-            parted: set[int] = set()
-            one = _one_period(nodes, events, parted)
-            _count_copies(at_once, events, one, 0, (), 1, budget, _walked_order(nodes), parted)
-        except ValueError:
-            return None
-        message = at_once.message(lines)
-        if message is not None:
-            found.append(message)
+        if k in slid:
+            found.extend(slid[k])
+        else:
+            at_once = _AtOnce(line)
+            try:
+                parted: set[int] = set()
+                one = _one_period(nodes, events, parted)
+                _count_copies(at_once, events, one, 0, (), 1, budget, _walked_order(nodes), parted)
+            except ValueError:
+                return None
+            message = at_once.message(lines)
+            if message is not None:
+                found.append(message)
         kept = [events[i] for i in _loops._events_of(nodes)]
         found.extend(_per_line(lowered, line, system.controllers[line.owner], kept, unresolved))
     return found
@@ -1158,6 +1351,15 @@ def flat(
         if slot is not None:
             _insert(event, "qudit", [("tone_slot", slot)])
     return handle_slot
+
+
+def framed(program: dict[str, Any], tone_slots: Mapping[int, int]) -> None:
+    """Give the ``frame_state`` and ``runtime_tones`` entries of format /1
+    *program* on a line keeping one tone slot (*tone_slots*, by line) the
+    slot, in place."""
+    for key in ("frame_state", "runtime_tones"):
+        if key in program:
+            program[key] = flat_frames(program[key], tone_slots)
 
 
 def flat_frames(found: Any, handle_slot: Mapping[int, int]) -> Any:

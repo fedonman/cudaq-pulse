@@ -2,7 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 """A call's float wait lengths in an if arm count only as far as they make
 that arm the longer one: each call is checked as the same program with
-those lengths written in is when built."""
+those lengths written in is when built. The kernels take two lines, a
+drive line and a readout line, whose operations follow each other, so the
+schedule is what refuses them past the controller's longest program; op
+after op they may sum to twice that."""
 
 from __future__ import annotations
 
@@ -18,7 +21,11 @@ from tests._handles import Q
 
 # 5000 ns on the 2 GHz clock of Q's quantum system: 10,000 cycles.
 MACHINE = ControlSystem(controllers=[Controller(max_program_duration=5_000)])
-LIMIT = r"Controller\.max_program_duration"
+# Either check's own sentence: the sum's, or the schedule's.
+LIMIT = (
+    r"the longest program of the controller \(Controller\.max_program_duration\)"
+    r"|lasts \d+ cycles, more than controllers\[0\]'s max_program_duration of"
+)
 BOUNDS = (4, 10**6)
 LENGTHS = [4.0, 1999.5, 3000.0, 4400.4, 6000.0, 7600.0, 9700.0, 12_000.0]
 SHAPES = ["longer other arm", "both arms", "no else", "nested in a loop", "loop in an arm"]
@@ -91,7 +98,10 @@ def test_a_call_is_checked_as_the_program_with_its_lengths_written_in(shape):
     compiled = pulse.compile(_kernel(shape), control_system=MACHINE)
     waits = compiled.lower(Q[0], 4.0, 4.0).generic.waits
     assert len(waits.length) == 5
-    cycles, most, _, repeats = waits.length[:4]
+    cycles, stop, limited, repeats = waits.length[:4]
+    # The sum stops at the longest program, 10,000 cycles, times two lines.
+    most = 10_000
+    assert (stop, limited) == (2 * most, 1)
     newly = 0
     outcomes = set()
     for x in LENGTHS:
@@ -130,8 +140,10 @@ def test_an_unpickled_module_checks_waits_in_ifs_as_compiled():
     assert again.length == waits.length and len(waits.length) == 5
     assert again.ok.__code__.co_code == waits.ok.__code__.co_code
     again.check([5000.0, 4.0])
+    # Within twice the longest program the sum passes, and the schedule decides.
+    again.check([5000.0, 6000.0])
     with pytest.raises(ValueError, match=LIMIT):
-        again.check([5000.0, 6000.0])
+        again.check([5000.0, 16_000.0])
 
 
 def test_waits_outside_ifs_keep_the_sum():
@@ -143,3 +155,31 @@ def test_waits_outside_ifs_keep_the_sum():
 
     waits = pulse.compile(flat, control_system=MACHINE).lower(Q[0], 4.0).generic.waits
     assert len(waits.length) == 4
+
+
+def _two_lines_in_an_arm(cycles):
+    @pulse.kernel
+    def in_an_arm(a, b):
+        d = get_drive_line(a)
+        e = get_drive_line(b)
+        r = get_readout_line(a)
+        m = readout(r, square(100, 0.05))
+        sync(d, e, r)
+        if m:
+            drive(d, square(cycles, 0.1))
+            drive(e, square(cycles, 0.1))
+
+    return in_an_arm
+
+
+def test_two_lines_that_play_together_in_an_arm_count_once():
+    # Each drive is under the 10,000 cycles; op after op the arm sums to
+    # 12,100, which the sum alone refused, and it lasts 6100.
+    lowered = pulse.compile(_two_lines_in_an_arm(6000), control_system=MACHINE).lower(Q[0], Q[1])
+    assert max(e.start_cycles + e.duration_cycles for e in lowered.schedule) == 6100
+    # Past the limit as scheduled, the schedule refuses it, as the sum did.
+    with pytest.raises(CompilationError, match="lasts 10052 cycles, more than controllers"):
+        pulse.compile(_two_lines_in_an_arm(9952), control_system=MACHINE).lower(Q[0], Q[1])
+    # Past what three lines can last, the sum refuses it before any schedule.
+    with pytest.raises(CompilationError, match="the program lasts more than 10000 cycles"):
+        pulse.compile(_two_lines_in_an_arm(16_000), control_system=MACHINE).lower(Q[0], Q[1])

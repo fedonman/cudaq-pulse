@@ -499,3 +499,90 @@ def test_a_step_too_coarse_for_coupled_qudits_names_their_detuning():
     with warnings.catch_warnings():
         warnings.simplefilter("error", pulse.PulseWarning)
         _run(conditional_flip, 2, target=pair, dt_ns=0.025)
+
+
+@pytest.mark.parametrize("schedule", ["asap", "alap"])
+def test_the_default_end_of_a_loop_kept_as_a_loop_is_that_of_its_events(schedule, monkeypatch):
+    """Without ``t_end`` a simulation runs to the latest end of the
+    program's events. A long loop kept as a loop gives it from its last
+    iteration, without listing an event per iteration: the same end, and
+    the same state, as listing them gives."""
+    from cudaq_pulse._native._cudaq_pulse_native import PulseModule
+    from cudaq_pulse.runtime import simulate as simulate_module
+
+    @pulse.kernel
+    def rounds(q0, q1):
+        d = get_drive_line(q0)
+        e = get_drive_line(q1)
+        drive(d, square(8, 0.1))
+        for _ in range(4):
+            drive(d, square(8, 0.05))
+            wait(d, 6)
+        drive(d, square(4, 0.2))
+        # The other line's loop ends after the first line's last pulse.
+        for _ in range(5):
+            wait(e, 10)
+            drive(e, square(8, 0.05))
+
+    lowered = pulse.compile(rounds, schedule=schedule, unroll_threshold=0).lower(Q[0], Q[1])
+    assert "scf.for" in lowered.mlir()
+    end = float(lowered.duration)
+    event_tree = PulseModule.event_tree
+    made: list[object] = []
+    forms: list[type] = []
+
+    def listing(self, limit):
+        events = event_tree(self, limit)
+        forms.append(type(events))
+        return events
+
+    def run():
+        return pulse.simulate(lowered, levels=2, dt_ns=0.5, seed=0)
+
+    monkeypatch.setattr(PulseModule, "event_tree", listing)
+    monkeypatch.setattr(
+        simulate_module, "ScheduledEvent", lambda *event: made.append(event) or event
+    )
+    listed = run()
+    assert forms == [list]
+    monkeypatch.setattr(simulate_module, "_LISTED_EVENTS", 3)
+    rolled = run()
+    assert forms == [list, tuple]
+    # Neither builds an event to read its end.
+    assert made == []
+    assert listed.times_ns == rolled.times_ns == (0.0, end)
+    assert np.array_equal(listed.density_matrix, rolled.density_matrix)
+    given = pulse.simulate(lowered, levels=2, dt_ns=0.5, seed=0, t_end=end)
+    assert np.array_equal(given.density_matrix, rolled.density_matrix)
+
+
+def test_the_latest_timed_end_of_a_schedule_is_that_of_its_timed_events():
+    from cudaq_pulse._loops import Schedule
+    from cudaq_pulse.compiler import ScheduledEvent
+
+    nodes = [
+        ("drive", 0, 0, 5, 8, []),
+        ("wait", 0, 0, None, None, []),
+        (
+            3,
+            [
+                ("wait", 0, 0, None, 4, []),
+                ("drive", 0, 0, 20, 4, [10]),
+                # Later in each outer iteration, earlier in each inner one.
+                (2, [("drive", 1, 1, 30, 6, [10, -3]), ("readout", 1, 1, 33, 2, [12, 5])]),
+                # No iteration: none of its events is one.
+                (0, [("drive", 0, 0, 10**6, 1, [10, 1])]),
+            ],
+        ),
+        ("answer", 2, -1, 40, 0, []),
+    ]
+    schedule = Schedule(nodes, ScheduledEvent)
+    ends = [
+        e.start_cycles + e.duration_cycles
+        for e in schedule
+        if e.start_cycles is not None and e.duration_cycles is not None
+    ]
+    assert len(schedule) == 2 + 3 * (2 + 2 * 2) + 1 and len(ends) == len(schedule) - 4
+    assert schedule.latest_end(timed_only=True) == max(ends) == 33 + 2 * 12 + 5 + 2
+    assert schedule.latest_end() is None
+    assert Schedule([("wait", 0, 0, None, None, [])], ScheduledEvent).latest_end(True) == 0

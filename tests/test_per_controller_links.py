@@ -263,6 +263,26 @@ def test_exporting_every_controller_reads_the_program_s_calls_once(per_controlle
         assert all(len(part["calls"]) == (1 if per_controller else count) for part in parts)
 
 
+def test_one_controller_s_emulator_export_builds_the_schedule_once(monkeypatch):
+    qpu = _device(per_controller=True, processors=True)
+    lowered = _lower(two_rounds, qpu)
+    first = [lowered.export_to_emulator(controller=k) for k in range(3)]
+    assert [bool(part["events"]) for part in first] == [True, True, False]
+    schedule = type(lowered).schedule
+    reads = []
+
+    def counted(self):
+        reads.append(1)
+        return schedule.fget(self)
+
+    monkeypatch.setattr(type(lowered), "schedule", property(counted))
+    parts = [lowered.export_to_emulator(controller=k) for k in range(3)]
+    monkeypatch.undo()
+    assert parts == first
+    # Each read builds the schedule anew: one for each export.
+    assert len(reads) == 3
+
+
 # ── Processors ────────────────────────────────────────────────────────────────
 
 

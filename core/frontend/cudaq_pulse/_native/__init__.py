@@ -5,7 +5,7 @@
 from __future__ import annotations
 
 try:
-    from ._cudaq_pulse_native import *  # noqa: F401,F403
+    from ._cudaq_pulse_native import *  # noqa: F403
 except ImportError as _error:
     raise ImportError(
         "The cudaq-pulse native extension (_cudaq_pulse_native) could not be "

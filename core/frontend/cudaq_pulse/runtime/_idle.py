@@ -138,20 +138,24 @@ def through_gpu(
     with backend.lock:
         backend.module.set_attributes(backend.base, _interval_attributes(entries, t0, t1, steps))
         _, hamiltonian, collapse, *_ = backend.module.operator_program()
-    dims = backend.dims
-    # As _CpuBackend.evolve builds them, which inlines this for the per-call cost.
-    static = np.zeros((backend.dim, backend.dim), dtype=np.complex128)
-    driven = []
+    # What ``propagator`` declines for its size, before any operator is built.
+    if collapse and backend.dim > MAX_DISSIPATIVE_DIM:
+        return None
+    # The stretches follow from the terms' supports alone, so the operators
+    # on the whole register are built only once a stretch is long enough,
+    # and those of the drives not at all.
+    drives: list[tuple[int, Any, Any]] = []
+    frame_terms: list[tuple[int, Any, Any]] = []
+    static_terms: list[tuple[float, float, Any]] = []
     for re, im, kind, params, factors in hamiltonian:
         if kind:
             start, end = _propagate.support(params)
             if end > t0 and start < t1:
-                driven.append((kind, params, _full_operator(factors, dims)))
+                terms = frame_terms if plays_throughout(kind, params) else drives
+                terms.append((kind, params, factors))
         else:
-            static += (re + 1j * im) * _full_operator(factors, dims)
-    jumps = [(re + 1j * im) * _full_operator(f, dims) for re, im, _, _, f in collapse]
+            static_terms.append((re, im, factors))
     h = (t1 - t0) / steps
-    drives = [d for d in driven if not plays_throughout(d[0], d[1])]
     parts = []
     pending = done = 0
     for lo, hi in [*_active_ranges(drives, t0, h, steps), (steps, steps)]:
@@ -163,7 +167,12 @@ def through_gpu(
         done = max(done, hi)
     if not any(idle for _, _, idle in parts):
         return None
-    frame = [d for d in driven if plays_throughout(d[0], d[1])]
+    dims = backend.dims
+    static = np.zeros((backend.dim, backend.dim), dtype=np.complex128)
+    for re, im, factors in static_terms:
+        static += (re + 1j * im) * _full_operator(factors, dims)
+    frame = [(kind, params, _full_operator(factors, dims)) for kind, params, factors in frame_terms]
+    jumps = [(re + 1j * im) * _full_operator(f, dims) for re, im, _, _, f in collapse]
     idle = propagator(dims, static, frame, jumps, backend.dt_ns)
     if idle is None or idle.start > t0:
         return None

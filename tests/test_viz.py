@@ -99,12 +99,14 @@ def test_an_unscheduled_event_is_an_error():
 def test_save_schedule_writes_the_image_and_closes_its_figure(lowered, tmp_path):
     before = plt.get_fignums()
     path = tmp_path / "schedule.png"
-    viz.save_schedule(lowered, str(path), title="saved", figsize=(6, 2))
+    viz.save_schedule(lowered, path, title="saved", figsize=(6, 2))
     assert path.read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
     assert plt.get_fignums() == before
     svg = tmp_path / "schedule.svg"
     viz.save_schedule(lowered, str(svg))
     assert "<svg" in svg.read_text()
+    with pytest.raises(TypeError):
+        viz.save_schedule(lowered, path, dpi=300)  # type: ignore[call-arg]
 
 
 def test_timeline_takes_the_keywords_of_plot_schedule(lowered):

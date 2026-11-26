@@ -293,14 +293,21 @@ jobs:
       # comparison). A pull request runs on its merge commit, applied to the
       # tip of its base branch when GitHub made the merge: that is its base,
       # not the commit the branch began at, which the event names; a push's
-      # base is the previous tip.
+      # base is the previous tip; a run dispatched on a branch other than
+      # main has the branch's merge base with main (none when it takes a
+      # baseline).
       - name: Perf gate
         env:
           PROCESSES: ${{ inputs.perf_baseline && 5 || 2 }}
+          PERF_BASELINE: ${{ inputs.perf_baseline }}
           BEFORE: ${{ github.event.before }}
         run: |
           base="$BEFORE"
           if [ "$GITHUB_EVENT_NAME" = pull_request ]; then base="$(git rev-parse HEAD^1)"; fi
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ] && [ "$GITHUB_REF" != refs/heads/main ] \
+            && [ "$PERF_BASELINE" != true ]; then
+            base="$(git merge-base HEAD origin/main)"
+          fi
           uv run --no-sync python tools/perf-gate.py --processes "$PROCESSES" \
             ${base:+--base-commit "$base"} \
             --out perf-gate/perf_gate.json --dumps perf-gate/callgrind \

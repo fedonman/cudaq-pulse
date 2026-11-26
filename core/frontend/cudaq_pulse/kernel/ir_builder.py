@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import numbers
 from collections import namedtuple
+from collections.abc import Callable, Iterator
 from typing import Any, NoReturn
 
 from .._errors import CompilationError as CompilationError
@@ -34,14 +35,163 @@ class SymbolicValueError(CompilationError):
 
 
 def parameter_names(value: Any) -> tuple[str, ...]:
-    """Names of the kernel parameters a symbolic value depends on."""
+    """Names of the kernel parameters a symbolic value depends on, as it
+    names them from left to right; a term that several others use is read
+    once."""
     if isinstance(value, Parameter):
         return (value.name,)
-    if isinstance(value, ParameterExpression):
-        return parameter_names(value.lhs) + parameter_names(value.rhs)
-    if isinstance(value, UndecidableComparison):
-        return parameter_names(value.lhs) + parameter_names(value.rhs)
+    if isinstance(value, (ParameterExpression, UndecidableComparison)):
+        return tuple(leaf.name for leaf in expression_leaves(value) if isinstance(leaf, Parameter))
     return ()
+
+
+def expression_leaves(value: Any, kinds: tuple[Any, ...] | None = None) -> Iterator[Any]:
+    """What the expression *value* is computed from, from left to right:
+    the operands of its operations that are not such operations themselves.
+    The operations are arithmetic and comparisons, or those of *kinds*
+    (``ARITHMETIC``, ``COMPARISONS``); anything else is an operand. An
+    operation that several others use is entered once, so an expression that
+    doubles a term forty times is forty steps, not 2**40; and nothing here
+    calls itself, so an expression may be thousands of operations deep."""
+    if kinds is None:
+        kinds = _EXPRESSIONS
+    if value.__class__ not in kinds:
+        yield value
+        return
+    seen = {id(value)}
+    stack = [value.rhs, value.lhs]
+    while stack:
+        item = stack.pop()
+        if item.__class__ in kinds:
+            if id(item) not in seen:
+                seen.add(id(item))
+                stack.append(item.rhs)
+                stack.append(item.lhs)
+        else:
+            yield item
+
+
+def expression_nodes(
+    value: Any,
+    kinds: tuple[Any, ...] | None = None,
+    entering: Callable[[Any], bool] | None = None,
+) -> list[Any]:
+    """The operations of the expression *value* (those of *kinds*, as
+    ``expression_leaves`` takes them), each once however many others use
+    it, and each after its operands, left before right. With *entering*,
+    only the operations it holds for, and nothing below one it does not
+    hold for. No recursion."""
+    if kinds is None:
+        kinds = _EXPRESSIONS
+    if value.__class__ not in kinds or (entering is not None and not entering(value)):
+        return []
+    nodes: list[Any] = []
+    seen = {id(value)}
+    # The operations on the way down, and how many operands of each are entered.
+    stack = [value]
+    entered = [0]
+    while stack:
+        node = stack[-1]
+        step = entered[-1]
+        if step == 2:
+            nodes.append(node)
+            stack.pop()
+            entered.pop()
+            continue
+        entered[-1] = step + 1
+        operand = node.rhs if step else node.lhs
+        if (
+            operand.__class__ in kinds
+            and id(operand) not in seen
+            and (entering is None or entering(operand))
+        ):
+            seen.add(id(operand))
+            stack.append(operand)
+            entered.append(0)
+    return nodes
+
+
+def shared_text(
+    value: Any,
+    written: Callable[[Any, str, str, Callable[[Any], bool]], str],
+    leaf: Callable[[Any, list[str] | None], str],
+    kinds: tuple[Any, ...] | None = None,
+    names: list[str] | None = None,
+) -> str:
+    """The expression *value* as text: ``written(node, lhs, rhs, plain)`` for
+    each operation from the texts of its operands, where ``plain(operand)``
+    says the operand is an operation written out in place;
+    ``leaf(operand, names)`` for everything else. An operation that several
+    others use is written once, under a name (``t1``, ``t2``, ...), and the
+    names follow the text: ``t2 + t2 with t1 = tau * 2.0, t2 = t1 + t1``. So
+    the text is as long as the expression has operations, not as long as it
+    is written out. *names* is the list of names of a text this one is part
+    of: its names are added there and follow that text, once."""
+    nodes = expression_nodes(value, kinds)
+    if not nodes:
+        return leaf(value, names)
+    outermost = names is None
+    if names is None:
+        names = []
+    uses: dict[int, int] = {}
+    if len(nodes) > 1:
+        for node in nodes:
+            uses[id(node.lhs)] = uses.get(id(node.lhs), 0) + 1
+            uses[id(node.rhs)] = uses.get(id(node.rhs), 0) + 1
+    texts: dict[int, str] = {}
+    in_place: set[int] = set()
+
+    def plain(operand: Any) -> bool:
+        return id(operand) in in_place
+
+    def of(operand: Any) -> str:
+        text = texts.get(id(operand))
+        if text is None:
+            text = leaf(operand, names)
+            if operand.__class__ in _EXPRESSIONS:
+                # An operation of another kind, which the leaf wrote: once.
+                texts[id(operand)] = text
+        return text
+
+    for node in nodes:
+        lhs = of(node.lhs)
+        # Negation and casts have one operand; None is an operand elsewhere.
+        if node.rhs is None and node.__class__ is ParameterExpression and node.op in _UNARY:
+            rhs = ""
+        else:
+            rhs = of(node.rhs)
+        text = written(node, lhs, rhs, plain)
+        # A cast is written as its operand: one that others share is named
+        # unless its operand already is a name or is not an operation.
+        if uses.get(id(node), 0) > 1 and (text != lhs or id(node.lhs) in in_place):
+            name = f"t{len(names) + 1}"
+            names.append(f"{name} = {text}")
+            text = name
+        else:
+            in_place.add(id(node))
+        texts[id(node)] = text
+    text = texts[id(value)]
+    return f"{text} with {', '.join(names)}" if outermost and names else text
+
+
+_UNARY = ("neg", "cast")
+
+
+def written_together(
+    values: tuple[Any, ...], write: Callable[[Any, list[str] | None], str] | None = None
+) -> tuple[list[str], str]:
+    """The texts of *values* that one message joins (their reprs, or
+    ``write(value, names)``), and what follows the joined text: the names of
+    the terms they share, given once for all of them, or nothing."""
+    names: list[str] = []
+    texts = [(write or _repr_with)(value, names) for value in values]
+    return texts, f" with {', '.join(names)}" if names else ""
+
+
+def _repr_with(value: Any, names: list[str] | None) -> str:
+    if value.__class__ in _EXPRESSIONS:
+        return shared_text(value, _node_repr, _leaf_repr, None, names)
+    return repr(value)
 
 
 class _UndecidableComparisons:
@@ -100,7 +250,10 @@ class UndecidableComparison(_UndecidableComparisons):
     two such bools (see ``bit_logic``).
     """
 
-    __slots__ = ("lhs", "op", "rhs")
+    __slots__ = ("lhs", "measured", "op", "rhs")
+    # Whether it is computed from a measurement result: set when first
+    # asked for (``_conditions.measured``), not when it is made.
+    measured: bool
 
     def __init__(self, lhs: Any, op: str, rhs: Any):
         self.lhs = lhs
@@ -126,15 +279,16 @@ class UndecidableComparison(_UndecidableComparisons):
                 "runs; use it as an if condition, alone or with and, or, not",
                 code="runtime_value",
             )
+        (lhs, rhs), shared = written_together((self.lhs, self.rhs))
         raise SymbolicValueError(
-            f"cannot decide {self.lhs!r} {self.op} {self.rhs!r} at trace time: a float "
+            f"cannot decide {lhs} {self.op} {rhs}{shared} at trace time: a float "
             "argument has no value while the kernel compiles",
             names,
             f"the comparison {self.op}",
         )
 
     def __repr__(self) -> str:
-        return f"({self.lhs!r} {self.op} {self.rhs!r})"
+        return shared_text(self, _node_repr, _leaf_repr)
 
 
 class _SymbolicNumber(_UndecidableComparisons):
@@ -265,9 +419,27 @@ class ParameterExpression(_SymbolicNumber):
         self.dtype = dtype
 
     def __repr__(self) -> str:
-        if self.op in ("neg", "cast"):
-            return f"ParameterExpression({self.op}, {self.lhs!r}, {self.dtype})"
-        return f"ParameterExpression({self.op}, {self.lhs!r}, {self.rhs!r})"
+        return shared_text(self, _node_repr, _leaf_repr)
+
+
+# The operations an expression is made of, for ``expression_nodes``. The
+# walks test a value's own class against these: a subclass of one would be
+# taken for an operand.
+ARITHMETIC: tuple[type, ...] = (ParameterExpression,)
+COMPARISONS: tuple[type, ...] = (UndecidableComparison,)
+_EXPRESSIONS: tuple[type, ...] = (ParameterExpression, UndecidableComparison)
+
+
+def _leaf_repr(value: Any, names: list[str] | None) -> str:
+    return repr(value)
+
+
+def _node_repr(node: Any, lhs: str, rhs: str, plain: Callable[[Any], bool]) -> str:
+    if node.__class__ is UndecidableComparison:
+        return f"({lhs} {node.op} {rhs})"
+    if node.op in ("neg", "cast"):
+        return f"ParameterExpression({node.op}, {lhs}, {node.dtype})"
+    return f"ParameterExpression({node.op}, {lhs}, {rhs})"
 
 
 class AnswerValue(_SymbolicNumber):
@@ -322,7 +494,7 @@ def contains_answer(value: Any) -> bool:
     if isinstance(value, AnswerValue):
         return True
     if isinstance(value, (ParameterExpression, UndecidableComparison)):
-        return contains_answer(value.lhs) or contains_answer(value.rhs)
+        return any(isinstance(leaf, AnswerValue) for leaf in expression_leaves(value))
     return False
 
 
@@ -341,13 +513,31 @@ def is_arithmetic(value: Any) -> bool:
     if cls is Parameter or cls is float or cls is int:
         return True
     if cls is ParameterExpression:
-        op = value.op
-        if op in _ARITHMETIC:
-            return is_arithmetic(value.lhs) and is_arithmetic(value.rhs)
-        if op == "neg" or (op == "cast" and value.dtype == "f64"):
-            return is_arithmetic(value.lhs)
-        return False
+        for node in expression_nodes(value, ARITHMETIC):
+            op = node.op
+            if op in _ARITHMETIC:
+                if not (_arithmetic_operand(node.lhs) and _arithmetic_operand(node.rhs)):
+                    return False
+            elif op == "neg" or (op == "cast" and node.dtype == "f64"):
+                if not _arithmetic_operand(node.lhs):
+                    return False
+            else:
+                return False
+        return True
     return isinstance(value, numbers.Real)
+
+
+# Whether an operand of arithmetic is a parameter, a number, or
+# arithmetic itself, which ``is_arithmetic`` tests where it comes.
+def _arithmetic_operand(value: Any) -> bool:
+    cls = value.__class__
+    return (
+        cls is ParameterExpression
+        or cls is Parameter
+        or cls is float
+        or cls is int
+        or isinstance(value, numbers.Real)
+    )
 
 
 def arithmetic_source(value: Any) -> str | None:
@@ -357,18 +547,69 @@ def arithmetic_source(value: Any) -> str | None:
     if isinstance(value, Parameter):
         return f"a[{value.index}]"
     if isinstance(value, ParameterExpression):
-        if value.op == "neg":
-            inner = arithmetic_source(value.lhs)
-            return None if inner is None else f"(-{inner})"
-        if value.op == "cast":
-            return arithmetic_source(value.lhs) if value.dtype == "f64" else None
-        symbol = _ARITHMETIC.get(value.op)
-        if symbol is None:
-            return None
-        lhs, rhs = arithmetic_source(value.lhs), arithmetic_source(value.rhs)
-        if lhs is None or rhs is None:
-            return None
-        return f"({lhs} {symbol} {rhs})"
+        nodes = expression_nodes(value, ARITHMETIC)
+        # Written in place, an operation used twice is computed twice and
+        # one two hundred deep is more parentheses deep than Python reads.
+        # Before either, every operation is a named term of one flat
+        # tuple, computed once and in the same order: (t0 := a[0] * 2.0,
+        # t1 := t0 + t0)[-1].
+        depth: dict[int, int] = {}
+        flat = False
+        for node in nodes:
+            # A cast is written as its operand, without parentheses of its own.
+            deep = max(depth.get(id(node.lhs), 0), depth.get(id(node.rhs), 0))
+            deep += node.op != "cast"
+            depth[id(node)] = deep
+            if deep > _WRITTEN_IN_PLACE:
+                flat = True
+        if not flat and len(nodes) > 1:
+            used: set[int] = set()
+            for node in nodes:
+                for operand in (node.lhs, node.rhs):
+                    if id(operand) in depth:
+                        if id(operand) in used:
+                            flat = True
+                        used.add(id(operand))
+        texts: dict[int, str | None] = {}
+        terms: list[str] = []
+        for node in nodes:
+            lhs = texts[id(node.lhs)] if id(node.lhs) in texts else _source_operand(node.lhs)
+            text: str | None
+            if node.op == "neg":
+                text = None if lhs is None else f"(-{lhs})"
+            elif node.op == "cast":
+                text = lhs if node.dtype == "f64" else None
+            else:
+                symbol = _ARITHMETIC.get(node.op)
+                rhs = texts[id(node.rhs)] if id(node.rhs) in texts else _source_operand(node.rhs)
+                text = (
+                    None
+                    if symbol is None or lhs is None or rhs is None
+                    else f"({lhs} {symbol} {rhs})"
+                )
+            if text is None:
+                return None
+            if flat and node.op != "cast":
+                terms.append(f"t{len(terms)} := {text}")
+                text = f"t{len(terms) - 1}"
+            texts[id(node)] = text
+        if flat and terms:
+            return f"({', '.join(terms)}, {texts[id(value)]})[-1]"
+        return texts[id(value)]
+    if isinstance(value, numbers.Real):
+        return repr(float(value))
+    return None
+
+
+# The parentheses deep an expression is still written in place in its
+# source. Python reads 200; the tests a wait's source is written into add a
+# few.
+_WRITTEN_IN_PLACE = 190
+
+
+def _source_operand(value: Any) -> str | None:
+    if isinstance(value, Parameter):
+        return f"a[{value.index}]"
     if isinstance(value, numbers.Real):
         return repr(float(value))
     return None
@@ -380,37 +621,52 @@ def without_answers(value: Any) -> Any:
     if isinstance(value, AnswerValue):
         return 0.0
     if isinstance(value, ParameterExpression):
-        return ParameterExpression(
-            value.op, without_answers(value.lhs), without_answers(value.rhs), dtype=value.dtype
-        )
+        made: dict[int, Any] = {}
+        for node in expression_nodes(value, ARITHMETIC):
+            lhs, rhs = node.lhs, node.rhs
+            made[id(node)] = ParameterExpression(
+                node.op,
+                made[id(lhs)] if id(lhs) in made else 0.0 if isinstance(lhs, AnswerValue) else lhs,
+                made[id(rhs)] if id(rhs) in made else 0.0 if isinstance(rhs, AnswerValue) else rhs,
+                dtype=node.dtype,
+            )
+        return made[id(value)]
     return value
 
 
-def arithmetic_text(value: Any) -> str:
-    """*value* as the user wrote it, roughly: ``tau / 2``, ``2.0 * tau + 40.0``."""
+def arithmetic_text(value: Any, names: list[str] | None = None) -> str:
+    """*value* as the user wrote it, roughly: ``tau / 2``, ``2.0 * tau + 40.0``;
+    *names* as ``shared_text`` takes them."""
     if isinstance(value, Parameter):
         return value.name
     if isinstance(value, AnswerValue):
         return value.label or "answer"
     if isinstance(value, ParameterExpression):
-        if value.op == "neg":
-            return f"-{_operand_text(value.lhs, 3)}"
-        if value.op == "cast":
-            return arithmetic_text(value.lhs)
-        symbol = _ARITHMETIC.get(value.op, value.op)
-        level = _PRECEDENCE.get(value.op, 3)
-        lhs = _operand_text(value.lhs, level)
-        rhs = _operand_text(value.rhs, level + (value.op in ("sub", "div")))
-        return f"{lhs} {symbol} {rhs}"
+        return shared_text(value, _arithmetic_node_text, arithmetic_text, ARITHMETIC, names)
+    if value.__class__ is UndecidableComparison:
+        return shared_text(value, _node_repr, _leaf_repr, None, names)
     return repr(value)
 
 
 _PRECEDENCE = {"add": 1, "sub": 1, "mul": 2, "div": 2}
 
 
-def _operand_text(value: Any, level: int) -> str:
-    text = arithmetic_text(value)
-    if isinstance(value, ParameterExpression) and _PRECEDENCE.get(value.op, 3) < level:
+def _arithmetic_node_text(node: Any, lhs: str, rhs: str, plain: Callable[[Any], bool]) -> str:
+    if node.op == "neg":
+        return f"-{_operand_text(node.lhs, lhs, 3, plain)}"
+    if node.op == "cast":
+        return lhs
+    symbol = _ARITHMETIC.get(node.op, node.op)
+    level = _PRECEDENCE.get(node.op, 3)
+    lhs = _operand_text(node.lhs, lhs, level, plain)
+    rhs = _operand_text(node.rhs, rhs, level + (node.op in ("sub", "div")), plain)
+    return f"{lhs} {symbol} {rhs}"
+
+
+# *text*, which writes the operand *value*, in parentheses where it is
+# an operation written in place that binds less than *level*.
+def _operand_text(value: Any, text: str, level: int, plain: Callable[[Any], bool]) -> str:
+    if plain(value) and _PRECEDENCE.get(value.op, 3) < level:
         return f"({text})"
     return text
 
@@ -493,6 +749,7 @@ class PythonIRBuilder:
     sample_rate: tuple[int, int] | None = None
     # Each line's sample rate, when they differ; see PackedIRBuilder.
     sample_rate_of: Any = None
+    tracer: Any = None
 
     def __init__(self, name: str = "main"):
         self.name = name

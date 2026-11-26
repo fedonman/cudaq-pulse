@@ -320,9 +320,10 @@ class Schedule(Sequence[Any]):
             start += sum(i * s for i, s in zip(at, shifts, strict=True) if s is not None)
         return self._event(kind, line, qudit, start, duration)
 
-    def latest_end(self) -> int | None:
+    def latest_end(self, timed_only: bool = False) -> int | None:
         """The latest end of an event, or ``None`` when some event has no
-        start or duration yet."""
+        start or duration yet; with *timed_only*, the latest end of those
+        that have both."""
         end = 0
         work: list[tuple[_Block, tuple[int, ...]]] = [(self._root, ())]
         while work:
@@ -333,6 +334,8 @@ class Schedule(Sequence[Any]):
                     continue
                 _, _, _, start, duration, shifts = item
                 if start is None or duration is None:
+                    if timed_only:
+                        continue
                     return None
                 # Each loop's iterations shift the op alike: the latest takes
                 # each loop's last iteration that moves it later.
@@ -1076,7 +1079,7 @@ def _off_grid(
         start, duration = found
         line, kind = events[i]["line"], events[i]["kind"]
         return _OnProgramClock(
-            lambda s: message(own, lines[line], line, kind, s, duration), start, own.ratio, i
+            lambda s: message(own, lines[line], kind, s, duration), start, own.ratio, i
         )
 
     return _each_event(tree, make)

@@ -6,7 +6,9 @@ operations the compiler computes them with."""
 
 from __future__ import annotations
 
+import copy
 import itertools
+import json
 import math
 import re
 import warnings
@@ -195,6 +197,312 @@ def test_every_term_is_exercised():
     assert exported | {"controller_cycles"} == set(ExpressionTerm)
 
 
+# ── Terms several terms use, and terms many deep ─────────────────────────────
+
+# How many terms deep an expression's text nests (kNested of the native walk).
+_NESTED = 65
+
+
+def _nesting(expression):
+    """How many terms deep the text of *expression* and of its terms nests."""
+    deepest = 0
+    for top in (expression, *expression.get("terms", ())):
+        todo = [(top, 1)]
+        while todo:
+            node, depth = todo.pop()
+            if isinstance(node, dict) and "of" in node:
+                deepest = max(deepest, depth)
+                todo.extend((child, depth + 1) for child in node["of"])
+    return deepest
+
+
+def _emulated_wait(lowered, x, n):
+    """The length the emulated program waits when the call answers x and n."""
+    args = lowered.options.schedule_args()
+    module = lowered._concrete().simulation_module(*args)
+    readout, iteration = module.next_measurement([])[:2]
+    call = module.next_call([[readout, *iteration, 1]])[0]
+    bound = module.bind_call(call, [x, float(n)], *args)
+    [wait] = (e for e in bound.events() if e[0] == "wait")
+    return wait[4]
+
+
+def _add(kind, *of):
+    return {"op": "add", "type": kind, "of": list(of)}
+
+
+def test_a_term_two_terms_use_is_in_the_terms_of_its_expression_once():
+    body = ["t = x * 2.0", *["t = t + t"] * 3, "shift_phase(d.tone, t)"]
+    program = pulse.compile(_kernel(body)).lower(Q[0]).export_to_controller()
+    answer = _answer(program)
+    expression = _value(program)
+    product = {"op": "mul", "type": "float", "of": [{"answer": answer, "result": 0}, {"const": 2}]}
+    assert expression == {
+        "terms": [
+            product,
+            _add("float", {"term": 0}, {"term": 0}),
+            _add("float", {"term": 1}, {"term": 1}),
+        ],
+        **_add("float", {"term": 2}, {"term": 2}),
+    }
+    assert next(iter(expression)) == "terms"
+    assert evaluate_expression(expression, answers={answer: [0.25, 3]}) == 4.0
+    # A term one term uses is written where it is used, as it was.
+    once = pulse.compile(_kernel(["shift_phase(d.tone, x * 2.0 + 0.5)"])).lower(Q[0])
+    assert _value(once.export_to_controller()) == _add(
+        "float", {**product, "of": [{"answer": answer, "result": 0}, {"const": 2}]}, {"const": 0.5}
+    )
+
+
+_DOUBLED = {
+    "phase": (
+        ["t = x * 1.0e-9"],
+        "shift_phase(d.tone, t)\n    drive(d, square(20, 0.2))",
+        0.25e-9 * 2.0**40,
+    ),
+    "length": (["t = x * 1.0e-9"], "wait(d, int(t), bounds=(0, 4000))", int(0.25e-9 * 2.0**40)),
+    "cycles": (["t = n * 1"], "wait(d, t % 1000, bounds=(0, 4000))", 3 * 2**40 % 1000),
+    "amplitude": (["t = x * 1.0e-13"], "drive(d, square(40, t))", None),
+    "condition": (
+        ["c = n > 3", "e = x > 0.1"],
+        "if c:\n        drive(d, square(40, 0.1))\n    drive(d, square(20, 0.2))",
+        None,
+    ),
+}
+
+
+@pytest.mark.parametrize("value", _DOUBLED)
+def test_a_value_that_uses_a_term_twice_forty_times_over_exports_each_term_once(value):
+    first, use, expected = _DOUBLED[value]
+    step = "c = (c | c) & (c | e)" if value == "condition" else "t = t + t"
+    lowered = pulse.compile(_kernel([*first, *[step] * 40, use])).lower(Q[0])
+    program = lowered.export_to_controller()
+    assert len(json.dumps(program)) < 40_000
+    rolled = lowered.export_to_controller(version=2)
+    assert unroll(rolled) == program
+    module = lowered._concrete()
+    _, checked = module.controller_events(_PARAMETERS, _AMPLITUDES)
+    _, exported, _ = module.controller_program(
+        _PARAMETERS, _AMPLITUDES, lowered.classical != (), exportable=False
+    )
+    assert _computed(checked) == _computed(exported)
+    assert list(pulse.controller.check(lowered)) == []
+    if expected is not None:
+        expression = _value(program)
+        assert 39 <= len(expression["terms"]) <= 41
+        assert evaluate_expression(expression, answers={_answer(program): [0.25, 3]}) == expected
+
+
+def _chain(depth, shared):
+    step = "t = t + t % 3" if shared else "t = t + 1"
+    return ["t = n * 2", *[step] * depth, "wait(d, t, bounds=(0, 8000))"]
+
+
+def _chained(depth, shared, n):
+    t = n * 2
+    for _ in range(depth):
+        t = t + t % 3 if shared else t + 1
+    return t
+
+
+@pytest.mark.parametrize(
+    ("depth", "shared"),
+    [
+        (63, False),
+        (64, False),
+        (65, False),
+        (66, False),
+        (130, False),
+        (2000, False),
+        (2000, True),
+    ],
+)
+def test_an_expression_of_any_depth_is_written_read_back_evaluated_and_emulated(depth, shared):
+    lowered = pulse.compile(_kernel(_chain(depth, shared))).lower(Q[0])
+    program = lowered.export_to_controller()
+    expression = _value(program)
+    # No text nests deeper than _NESTED terms: a term that deep is named.
+    assert _nesting(expression) <= _NESTED
+    if not shared:
+        # The length is a few terms over the chain.
+        assert depth // _NESTED <= len(expression.get("terms", ())) <= (depth + 8) // _NESTED
+    assert json.loads(json.dumps(program)) == program
+    assert json.loads(json.dumps(program, indent=1)) == program
+    assert copy.deepcopy(program) == program
+    assert unroll(lowered.export_to_controller(version=2)) == program
+    answer = _answer(program)
+    for n in (2, 3, 7):
+        waited = _chained(depth, shared, n)
+        assert evaluate_expression(expression, answers={answer: [0.0, n]}) == waited
+        assert _emulated_wait(lowered, 0.0, n) == waited
+
+
+@pytest.mark.parametrize("depth", [63, 64, 65, 66, 129, 130])
+def test_a_term_is_named_where_the_text_would_nest_deeper(depth):
+    # The product and *depth* sums over it: depth + 1 terms deep.
+    body = ["t = x * 2.0", *["t = t + 0.5"] * depth, "shift_phase(d.tone, t)"]
+    expression = _value(pulse.compile(_kernel(body)).lower(Q[0]).export_to_controller())
+    assert len(expression.get("terms", ())) == depth // _NESTED
+    assert _nesting(expression) == min(depth + 1, _NESTED)
+    assert evaluate_expression(expression, answers={2: [0.25, 3]}) == 0.5 + 0.5 * depth
+
+
+@pytest.mark.parametrize(
+    ("steps", "rolled"),
+    [(["t = t + t", "t = t + t"], True), (["t = t + 1"] * 200, True)],
+    ids=["shared", "deep"],
+)
+def test_a_loop_whose_iterations_compute_alike_stays_rolled(steps, rolled):
+    source = (
+        "def k(q):\n    d = get_drive_line(q)\n    ro = get_readout_line(q)\n"
+        "    for _ in range(4):\n"
+        "        x, n = _inputs.submit([readout(ro, square(100, 0.05))]).result()\n"
+        "        t = n * 2\n"
+        + "".join(f"        {step}\n" for step in steps)
+        + "        drive(d, square(40, 0.1))\n"
+        "        wait(d, t, bounds=(8, 4000))\n"
+    )
+    scope = {"_inputs": _inputs}
+    exec(source, scope)  # noqa: S102
+    lowered = pulse.compile(pulse.kernel(scope["k"])).lower(Q[0])
+    structured = lowered.export_to_controller(version=2)
+    assert any(e["kind"] == "loop" and e["trips"] == 4 for e in structured["events"]) == rolled
+    flat = lowered.export_to_controller()
+    assert unroll(structured) == flat
+    lengths = [e["length"] for e in flat["events"] if e["kind"] == "wait"]
+    answers = [e["index"] for e in flat["events"] if e["kind"] == "answer"]
+    assert len(lengths) == len(answers) == 4
+    expected = 3 * 2 * 4 if len(steps) == 2 else 3 * 2 + 200
+    for length, answer in zip(lengths, answers, strict=True):
+        assert "terms" in length
+        assert evaluate_expression(length, answers={answer: [0.0, 3]}) == expected
+    assert list(pulse.controller.check(lowered)) == []
+
+
+def test_a_float_expression_two_thousand_terms_deep_computes_what_python_computes():
+    for step in ("t = t + 0.5", "t = t + t * 0.001"):
+        body = ["t = x * 2.0", *[step] * 2000, "shift_phase(d.tone, t)"]
+        program = pulse.compile(_kernel(body)).lower(Q[0]).export_to_controller()
+        expression = _value(program)
+        assert _nesting(expression) <= _NESTED
+        assert json.loads(json.dumps(program, indent=1)) == program
+        t = 0.25 * 2.0
+        for _ in range(2000):
+            t = t + 0.5 if step.endswith("0.5") else t + t * 0.001
+        assert evaluate_expression(expression, answers={_answer(program): [0.25, 3]}) == t
+
+
+def test_a_deep_expression_over_a_term_its_every_step_uses_computes_what_python_computes():
+    body = [
+        "s = x * 2.0",
+        *["s = s * 1.0001 + 0.1"] * 40,
+        "t = s",
+        *["t = s + t * 0.5"] * 2000,
+        "shift_phase(d.tone, t)",
+    ]
+    program = pulse.compile(_kernel(body)).lower(Q[0]).export_to_controller()
+    expression = _value(program)
+    assert _nesting(expression) <= _NESTED
+    assert len(json.dumps(expression)) < 400_000
+    s = 0.25 * 2.0
+    for _ in range(40):
+        s = s * 1.0001 + 0.1
+    t = s
+    for _ in range(2000):
+        t = s + t * 0.5
+    assert evaluate_expression(expression, answers={_answer(program): [0.25, 3]}) == t
+
+
+def test_an_expression_without_a_term_used_twice_or_deep_has_no_terms():
+    for body in (*_PHASES.values(), *_WAITS.values(), ["wait(d, n * 4, bounds=(8, 400))"]):
+        expression = _value(pulse.compile(_kernel(body)).lower(Q[0]).export_to_controller())
+        assert "term" not in json.dumps(expression)
+
+
+def test_a_controller_clock_converts_a_length_that_names_terms():
+    machine = ControlSystem(controllers=[Controller(clock_ghz=2.0, cycles_per_timestep=4)])
+    body = ["t = n * 2", "wait(d, t + t, bounds=(8, 400))"]
+    program = (
+        pulse.compile(_kernel(body), control_system=machine).lower(Q[0]).export_to_controller()
+    )
+    expression = _value(program)
+    assert next(iter(expression)) == "terms"
+    assert expression["op"] == "controller_cycles"
+    assert len(expression["terms"]) == 1
+    assert "terms" not in json.dumps({**expression, "terms": None}["of"])
+    answer = _answer(program)
+    for n in (2, 7, 100):
+        got = evaluate_expression(expression, answers={answer: [0.0, n]})
+        assert got == _folded(body, 0.0, n, machine) == 4 * n
+    for n, cycles in ((1, 8), (150, 400)):
+        assert evaluate_expression(expression, answers={answer: [0.0, n]}) == cycles
+
+
+def test_a_length_on_a_controller_clock_nests_three_terms_more_at_most():
+    machine = ControlSystem(controllers=[Controller(clock_ghz=2.0, cycles_per_timestep=4)])
+    deepest = 0
+    for depth in (10, *range(56, 68), 300):
+        body = ["t = n * 2", *["t = t + 1"] * depth, "wait(d, t, bounds=(8, 4000))"]
+        lowered = pulse.compile(_kernel(body), control_system=machine).lower(Q[0])
+        plain = _value(pulse.compile(_kernel(body)).lower(Q[0]).export_to_controller())
+        expression = _value(lowered.export_to_controller())
+        assert expression["op"] == "controller_cycles"
+        assert _nesting(plain) <= _NESTED
+        # Its bounds and the conversion are terms over the length.
+        assert _nesting(plain) <= _nesting(expression) <= _nesting(plain) + 3
+        deepest = max(deepest, _nesting(expression))
+    assert deepest == _NESTED + 3
+
+
+def test_a_named_term_is_computed_once_and_only_from_earlier_terms():
+    zero = {"op": "div", "type": "int", "of": [{"const": 1}, {"const": 0}]}
+    twice = _add("int", {"term": 0}, {"term": 0})
+    with pytest.raises(ExecutionError, match="div of 1 by 0"):
+        evaluate_expression({"terms": [zero], **twice})
+    seven = _add("int", {"const": 3}, {"const": 4})
+    assert (
+        evaluate_expression({"terms": [seven, twice], **_add("int", {"term": 1}, {"term": 0})})
+        == 21
+    )
+    for terms, use in (
+        ([seven], {"term": 1}),
+        ([seven], {"term": -1}),
+        ([seven], {"term": True}),
+        ([seven], {"term": 0.0}),
+        ([seven], {"term": [0]}),
+        ([twice], {"term": 0}),
+        ([seven, _add("int", {"term": 2}, {"const": 1}), seven], {"term": 1}),
+    ):
+        for of in ([use, {"const": 1}], [{"term": 0}, use]):
+            with pytest.raises(InvalidValueError, match="not an earlier term"):
+                evaluate_expression({"terms": terms, **_add("int", *of)})
+    # A later term is no operand of an earlier one, computed already or not.
+    later = [_add("int", {"term": 1}, {"const": 1}), seven]
+    for of in ([{"term": 1}, {"term": 0}], [{"term": 0}, {"term": 1}]):
+        with pytest.raises(InvalidValueError, match="not an earlier term"):
+            evaluate_expression({"terms": later, **_add("int", *of)})
+    with pytest.raises(InvalidValueError, match="not an earlier term"):
+        evaluate_expression({"terms": [], **_add("int", {"term": 0}, {"const": 1})})
+    inner = {"terms": [seven], **_add("int", {"term": 0}, {"const": 0})}
+    for whole in (_add("int", inner, {"const": 0}), {"terms": [inner], **twice}):
+        with pytest.raises(InvalidValueError, match="only a whole expression has terms"):
+            evaluate_expression(whole)
+
+    class Counted(list):
+        asked = 0
+
+        def __getitem__(self, key):
+            Counted.asked += 1
+            return super().__getitem__(key)
+
+    read = _add("int", {"answer": 4, "result": 0}, {"const": 1})
+    four = {"terms": [read, twice], **_add("int", {"term": 1}, {"term": 1})}
+    assert evaluate_expression(four, answers={4: Counted([2])}) == 12
+    assert Counted.asked == 1
+    with pytest.raises(InvalidValueError, match="term of no expression"):
+        evaluate_expression({"term": 0})
+
+
 # ── Forms that mean the same ─────────────────────────────────────────────────
 
 
@@ -360,6 +668,58 @@ _CONDITIONS = {
     "readout level": (
         "%k = pulse.outcome %m : !pulse.measurement -> i64; "
         "%l = arith.muli %k, %n : i64; %cond = arith.cmpi slt, %l, %three : i64"
+    ),
+    # Terms that several others use.
+    "a comparison and its negation": (
+        "%le = arith.cmpi sle, %n, %three : i64; %not = arith.xori %le, %true : i1; "
+        "%q = arith.cmpf ogt, %x, %tenth : f64; %a = arith.andi %le, %q : i1; "
+        "%b = arith.ori %not, %q : i1; %cond = arith.xori %a, %b : i1"
+    ),
+    "a negation and its comparison": (
+        "%le = arith.cmpi sle, %n, %three : i64; %not = arith.xori %le, %true : i1; "
+        "%q = arith.cmpf ogt, %x, %tenth : f64; %b = arith.ori %not, %q : i1; "
+        "%a = arith.andi %le, %q : i1; %cond = arith.xori %b, %a : i1"
+    ),
+    "a comparison negated twice": (
+        "%le = arith.cmpi sle, %n, %three : i64; %not = arith.xori %le, %true : i1; "
+        "%e = arith.cmpi eq, %le, %false : i1; %q = arith.cmpf ogt, %x, %tenth : f64; "
+        "%a = arith.andi %not, %q : i1; %cond = arith.ori %a, %e : i1"
+    ),
+    "a negation used twice": (
+        "%le = arith.cmpi sle, %n, %three : i64; %not = arith.xori %le, %true : i1; "
+        "%q = arith.cmpf ogt, %x, %tenth : f64; %a = arith.andi %not, %q : i1; "
+        "%b = arith.ori %not, %le : i1; %cond = arith.xori %a, %b : i1"
+    ),
+    "a float comparison and its negation": (
+        "%le = arith.cmpf ole, %x, %tenth : f64; %not = arith.xori %le, %true : i1; "
+        "%p = arith.cmpi sgt, %n, %three : i64; %a = arith.andi %le, %p : i1; "
+        "%cond = arith.ori %a, %not : i1"
+    ),
+    "a level squared": (
+        "%k = pulse.outcome %m : !pulse.measurement -> i64; %l = arith.muli %k, %k : i64; "
+        "%j = arith.addi %l, %n : i64; %cond = arith.cmpi sgt, %j, %three : i64"
+    ),
+    "a readout set and not": (
+        "%s = pulse.is_set %m : !pulse.measurement -> i1; %p = arith.cmpi sgt, %n, %three : i64; "
+        "%a = arith.andi %s, %p : i1; %b = arith.xori %s, %true : i1; %cond = arith.ori %a, %b : i1"
+    ),
+    "a choice doubled": (
+        "%big = arith.cmpf ogt, %x, %tenth : f64; %z = arith.select %big, %n, %two : i64; "
+        "%y = arith.addi %z, %z : i64; %w = arith.muli %y, %z : i64; "
+        "%cond = arith.cmpi sge, %w, %three : i64"
+    ),
+    "a max and its comparison": (
+        "%c = arith.cmpi sgt, %n, %three : i64; %mx = arith.select %c, %n, %three : i64; "
+        "%e = arith.cmpi sge, %mx, %two : i64; %cond = arith.andi %c, %e : i1"
+    ),
+    "a sum of its sums": (
+        "%a = arith.muli %n, %three : i64; %b = arith.addi %a, %a : i64; "
+        "%c = arith.addi %b, %a : i64; %d = arith.subi %c, %b : i64; "
+        "%cond = arith.cmpi sge, %d, %three : i64"
+    ),
+    "an answer squared": (
+        "%f = arith.mulf %x, %x : f64; %g = arith.addf %f, %f : f64; "
+        "%cond = arith.cmpf ogt, %g, %tenth : f64"
     ),
 }
 _BRANCH_INPUTS = [

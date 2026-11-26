@@ -16,17 +16,23 @@ simulation models, and the shipped quantum systems.
    :members:
    :undoc-members:
 
+.. autoclass:: cudaq_pulse.quantum_systems.Offset
+
 Drive and readout
 -----------------
 
 A qudit's ``drive`` and ``readout`` are components of their modality: a
-``MicrowaveDrive`` and a ``DispersiveReadout`` for a transmon. They hold the
+``MicrowaveDrive`` and a ``DispersiveReadout`` for a transmon. A drive of
+another modality, or of none the system states, is a plain ``Drive``:
+``Drive(amplitude_scale_rad_per_ns=s)`` gives the Rabi rate of a pulse of
+amplitude 1, which is all the simulator needs of a drive. They hold the
 qudit's physics only; the pulses it is tuned for are its calibrations
 (below). They are read-only values; ``component.replace(field=value)`` makes
 a changed copy.
 Simulation picks its model by the component's type and refuses one it has no
 model for. In a system file each is a mapping with its ``kind``
-(``"microwave"``, ``"dispersive"``) and its fields.
+(``"microwave"`` or, for a plain ``Drive``, ``"drive"``; ``"dispersive"``)
+and its fields.
 
 .. autoclass:: cudaq_pulse.quantum_systems.Drive
    :members:

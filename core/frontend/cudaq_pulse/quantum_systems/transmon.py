@@ -106,8 +106,8 @@ def transmon_surface17(calibration: Any = "transmon_surface17") -> QuantumSystem
     return quantum_system("transmon_surface17", calibration=calibration)
 
 
+# The description ``transmon_surface17(calibration)`` is built from.
 def _described_surface17(calibration: Any = "transmon_surface17") -> _Description:
-    """The description ``transmon_surface17(calibration)`` is built from."""
     if isinstance(calibration, str):
         return _calibrated_surface17(calibration)
     target = _published_surface17()
@@ -140,10 +140,10 @@ def _published_surface17() -> _Description:
     return built
 
 
+# The published values with *calibration* applied, built once: what
+# ``calibration._apply`` of the published description gives, without
+# building the published qudits and couplings first.
 def _build_surface17(calibration: Calibration | None) -> _Description:
-    """The published values with *calibration* applied, built once: what
-    ``calibration._apply`` of the published description gives, without
-    building the published qudits and couplings first."""
     qudits = {}
     drive = MicrowaveDrive()
     x = DragPulse(duration_ns=_k.DRIVE_DURATION_NS, sigma_ns=_k.DRIVE_SIGMA_NS)
@@ -231,11 +231,11 @@ def _build_surface17(calibration: Calibration | None) -> _Description:
     )
 
 
+# A qudit's calibrations *given* with the values of
+# ``Calibration._qudit_pulses``: its drive-line pulses take the DRAG
+# coefficient *beta* and the 1-2 ``X`` *pulse* is added. Qudits given
+# equal pulses share them through *made*, as a pickle then stores them once.
 def _calibrated_pulses(given: Any, beta: Any, pulse: Any, made: dict[Any, Any]) -> Any:
-    """A qudit's calibrations *given* with the values of
-    ``Calibration._qudit_pulses``: its drive-line pulses take the DRAG
-    coefficient *beta* and the 1-2 ``X`` *pulse* is added. Qudits given
-    equal pulses share them through *made*, as a pickle then stores them once."""
     key = (id(given), beta, pulse)
     calibrated = made.get(key)
     if calibrated is None:
@@ -337,6 +337,7 @@ def transmon_lattice(
     return _calibrated(built, None, f"transmon_lattice({qudit_count})", None, None)
 
 
+# The description ``transmon_lattice(...)`` is built from.
 def _described_lattice(
     qudit_count: int,
     *,
@@ -348,7 +349,6 @@ def _described_lattice(
     t2_star_us: float = 15.0,
     topology: str = "linear",
 ) -> _Description:
-    """The description ``transmon_lattice(...)`` is built from."""
     if qudit_count < 1:
         raise InvalidValueError(f"qudit_count must be >= 1, got {qudit_count}")
 

@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any
 from .._device import Qudit, Register
 from .._errors import InvalidTypeError
 from .._programs import _PLACEMENTS, _Role, _structure
+from .._units import Time
 from ..compiler import CompileOptions, ScheduledKernel, build
 from ._kernel import (
     _FLOAT,
@@ -201,10 +202,28 @@ def _vector_values(kernel: Kernel[Any], value: Any, i: int) -> list[float]:
     try:
         return [x if type(x) is float else _real(x) for x in value]
     except TypeError:
-        raise InvalidTypeError(
-            f"{kernel.__name__}(): argument {kernel._names[i]!r} must be a list of real "
-            f"numbers, not {type(value).__name__}"
-        ) from None
+        pass
+    name = kernel._names[i]
+    for k, x in enumerate(value if isinstance(value, (list, tuple)) else ()):
+        if x.__class__ is Time:
+            raise InvalidTypeError(
+                f"{kernel.__name__}(): {name}[{k}] is a time ({x}), and a list[float] "
+                f"element is a plain number; pass {name} in nanoseconds and multiply "
+                "its elements by pulse.ns in the kernel, or drop its list[float] "
+                "annotation to compile the kernel for it"
+            )
+        if type(x) is not float:
+            try:
+                _real(x)
+            except TypeError:
+                raise InvalidTypeError(
+                    f"{kernel.__name__}(): {name}[{k}] must be a real number, "
+                    f"not {type(x).__name__}"
+                ) from None
+    raise InvalidTypeError(
+        f"{kernel.__name__}(): argument {name!r} must be a list of real "
+        f"numbers, not {type(value).__name__}"
+    )
 
 
 def _build_placed(
@@ -278,10 +297,12 @@ def _build_placed(
 
 
 def _real(value: Any) -> float:
-    """*value* as a float, if it is a real number."""
+    """*value* as a float, if it is a real number and not a time."""
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         try:
             return float(value.__float__())
         except AttributeError:
             raise InvalidTypeError(f"{type(value).__name__} is not a real number") from None
+    if value.__class__ is Time:
+        raise InvalidTypeError(f"{value} is a time, not a plain number")
     return float(value)

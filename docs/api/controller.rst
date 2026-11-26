@@ -21,7 +21,7 @@ Export and limits
    default: the schema's name and, after the slash, its major version.
 
 .. autoclass:: cudaq_pulse.controller.DriveLine
-   :members: qudits, qudit, delay_ns, max_concurrent_tones
+   :members: qudits, qudit, delay_ns, max_concurrent_tones, broadcast, frequency_hz
 
 .. autoclass:: cudaq_pulse.controller.ReadoutLine
    :members: qudits, qudit, delay_ns, max_concurrent_tones

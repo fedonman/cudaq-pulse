@@ -279,7 +279,7 @@ def test_the_backend_passes_validation():
         toy_isa.ToyBackend(), controller=toy_isa.toy_controller(feedback_latency_cycles=0)
     )
     assert report.ok, str(report)
-    assert str(report).splitlines()[-1] == "backend 'toy': 16 passed, 2 skipped"
+    assert str(report).splitlines()[-1] == "backend 'toy': 18 passed, 2 skipped"
 
 
 def test_what_the_toy_sequencer_cannot_play_is_refused(qpu):

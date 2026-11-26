@@ -13,8 +13,6 @@ import cudaq_pulse as pulse
 from tests._handles import Q
 from tests.kernel.ir_corpus import active_reset, dd_loop, feedback_in_loop, parametric
 
-_FREQ = {i: 5e9 + 1e8 * i for i in range(4)}
-
 
 def _many_drives(n):
     @pulse.kernel

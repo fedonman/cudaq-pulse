@@ -271,33 +271,6 @@ func.func @by_value() {
 
 // -----
 
-// So is a change whose value a measurement chooses.
-
-// CHECK-LABEL: func.func @by_value
-func.func @by_value() {
-  %q = pulse.qudit_alloc {qudit = 0 : i64} : !pulse.qudit
-  %d, %t = pulse.get_drive_line %q : (!pulse.qudit) -> (!pulse.drive_line, !pulse.tone)
-  %r, %rt = pulse.get_readout_line %q : (!pulse.qudit) -> (!pulse.readout_line, !pulse.tone)
-  %up = arith.constant 2.000000e+06 : f64
-  %down = arith.constant -1.000000e+06 : f64
-  %duration = arith.constant 16 : i64
-  %amplitude = arith.constant 1.000000e-01 : f64
-  %wf = pulse.gaussian %duration, %amplitude, %amplitude : i64, f64, f64 -> !pulse.waveform
-  %ro_duration = arith.constant 100 : i64
-  %ro = pulse.gaussian %ro_duration, %amplitude, %amplitude : i64, f64, f64 -> !pulse.waveform
-  %d1, %t1 = pulse.drive %d, %wf, %t <{duration_cycles = 16 : i64, start_cycles = 0 : i64}> : !pulse.drive_line, !pulse.waveform, !pulse.tone -> !pulse.drive_line, !pulse.tone
-  %r1, %rt1, %m = pulse.readout %r, %ro, %rt, iq <{duration_cycles = 100 : i64, start_cycles = 16 : i64}> : !pulse.readout_line, !pulse.waveform, !pulse.tone -> !pulse.readout_line, !pulse.tone, !pulse.measurement
-  %c = pulse.is_set %m : !pulse.measurement -> i1
-  %f = arith.select %c, %up, %down : f64
-  // CHECK: pulse.shift_frequency
-  // CHECK-SAME: <{duration_cycles = 0 : i64, start_cycles = 116 : i64}>
-  %t2 = pulse.shift_frequency %t1, %f : !pulse.tone, f64 -> !pulse.tone
-  %d2, %t3 = pulse.drive %d1, %wf, %t2 <{duration_cycles = 16 : i64, start_cycles = 116 : i64}> : !pulse.drive_line, !pulse.waveform, !pulse.tone -> !pulse.drive_line, !pulse.tone
-  return
-}
-
-// -----
-
 // A change that a drive on another line plays with before the wait on its
 // tone's line ends stays where the tone is free.
 

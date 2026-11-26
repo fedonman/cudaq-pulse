@@ -68,7 +68,7 @@ def check(pulses, others, total, system, qudit):
         busy = p["start"] + len(p["samples"])
         end = max(end, busy)
         peak = max(peak, max(abs(s) for s in p["samples"]))
-        detuning_mhz = (p["frequency_hz"] - system.qudit_freq[qudit.index]) / 1e6
+        detuning_mhz = (p["frequency_hz"] - qudit.dressed_frequency_hz) / 1e6
         if abs(detuning_mhz) > MAX_DETUNING_HZ / 1e6:
             limit_mhz = MAX_DETUNING_HZ / 1e6
             problems.append(
@@ -87,7 +87,8 @@ def check(pulses, others, total, system, qudit):
 def replay(pulses, system, qudit):
     """Level populations after the scorer plays the pulses itself from level 0."""
     to_ns = 1.0 / system.clock_ghz
-    native = system.qudit_freq[qudit.index]
+    # The line's own tone: the qubit's 0-1 frequency dressed by its couplings.
+    native = qudit.dressed_frequency_hz
     steps, clock, frequency, frame, last = [], 0, native, 0.0, 0
     for p in pulses:
         # A pulse's phase is its frame's at its start. The scorer's own tone, off the qubit by
@@ -127,9 +128,7 @@ def warm_up(system, qudit):
     """Everything the scorer does after the second process, done once before it starts."""
     pulses = [
         {"start": 4 * n, "samples": [0.01 + 0.01j] * 4, "frequency_hz": hz, "phase_rad": n}
-        for n, hz in enumerate(
-            (system.qudit_freq[qudit.index], 1.0e6 + system.qudit_freq[qudit.index])
-        )
+        for n, hz in enumerate((qudit.dressed_frequency_hz, 1.0e6 + qudit.dressed_frequency_hz))
     ]
     check(pulses, ["a readout"], 8, system, qudit)
     replay(pulses, system, qudit)

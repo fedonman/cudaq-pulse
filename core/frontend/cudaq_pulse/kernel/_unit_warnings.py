@@ -72,7 +72,7 @@ def with_unit_warnings(options: CompileOptions) -> CompileOptions:
 def carrier_hz(quantum_system: QuantumSystem) -> float:
     """The lowest qudit frequency of *quantum_system*, which frequencies are
     held against; its clock rate when it gives none."""
-    given = [q.frequency_hz for q in quantum_system.physical_qudits.values() if q.frequency_hz > 0]
+    given = [q._frame_hz for q in quantum_system.physical_qudits.values() if q._frame_hz > 0]
     return float(min(given)) if given else quantum_system.clock_ghz * 1e9
 
 
@@ -168,12 +168,10 @@ def unit_checked(builder: Any, quantum_system: QuantumSystem) -> type[PulseIREmi
     helpers' tracers, which are of its type, have them too. Frequencies are
     held against *quantum_system*'s carriers."""
     builder.unit_scale_hz = carrier_hz(quantum_system)
-    if builder.sample_rate_of is None:
+    if builder.tracer is None:
         emitter_type: type[PulseIREmitter] = PulseIREmitter
     else:
-        from ._mixed_rates import MixedRates
-
-        emitter_type = MixedRates
+        emitter_type = builder.tracer
     checked = _CHECKED.get(emitter_type)
     if checked is None:
         checked = type(

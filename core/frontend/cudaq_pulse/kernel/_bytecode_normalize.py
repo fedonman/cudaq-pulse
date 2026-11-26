@@ -391,8 +391,8 @@ _FOR_EXIT_CLEANUP = {
 }.get(_PY_MINOR, ())
 
 
+# Stack slots a for-loop iterator occupies (3.15+ adds one).
 def _iter_slots() -> int:
-    """Stack slots a for-loop iterator occupies (3.15+ adds one)."""
     op = dis.opmap["GET_ITER"]
     try:
         return 1 + dis.stack_effect(op)
@@ -482,10 +482,10 @@ class _Instr:
         self.offset, self.positions, self.argrepr = offset, positions, ""
 
 
+# *code*'s instructions with the arguments ``dis.get_instructions``
+# resolves (``tests/kernel/test_bytecode_normalize.py`` checks that they
+# decode the same).
 def _instructions(code: CodeType) -> list[_Instr]:
-    """*code*'s instructions with the arguments ``dis.get_instructions``
-    resolves (``tests/kernel/test_bytecode_normalize.py`` checks that they
-    decode the same)."""
     infos = _OP_INFO
     raw = code.co_code
     positions = [dis.Positions(*p) for p in code.co_positions()]
@@ -533,8 +533,8 @@ def _instructions(code: CodeType) -> list[_Instr]:
     return out
 
 
+# ``dis``'s text for the instruction at *offset*, for an error message.
 def _argrepr(code: CodeType, offset: int) -> str:
-    """``dis``'s text for the instruction at *offset*, for an error message."""
     return next((i.argrepr for i in dis.get_instructions(code) if i.offset == offset), "")
 
 
@@ -593,18 +593,17 @@ class DecodedCode:
         return "\n".join(lines)
 
 
+# Byte offsets where a ``try`` or ``with`` block's exception-table range
+# begins, and ``(start, end, handler, depth, lasti)`` per range such a
+# handler catches.
+#
+# ``try`` and ``with`` handlers start with ``PUSH_EXC_INFO``. An inlined
+# comprehension (3.12+) has an entry too, whose handler restores the
+# iteration variable and re-raises: its range is listed with the handler
+# that catches the re-raise, if any.
 def _protected(
     code: CodeType, raw: list[_Instr]
 ) -> tuple[list[int], list[tuple[int, int, int, int, bool]]]:
-    """Byte offsets where a ``try`` or ``with`` block's exception-table range
-    begins, and ``(start, end, handler, depth, lasti)`` per range such a
-    handler catches.
-
-    ``try`` and ``with`` handlers start with ``PUSH_EXC_INFO``. An inlined
-    comprehension (3.12+) has an entry too, whose handler restores the
-    iteration variable and re-raises: its range is listed with the handler
-    that catches the re-raise, if any.
-    """
     if not code.co_exceptiontable:
         return [], []
     entries = getattr(dis.Bytecode(code), "exception_entries", ())
@@ -623,8 +622,8 @@ def _protected(
     return starts, out
 
 
+# Decode *code* into canonical instructions (uncached).
 def _decode(code: CodeType) -> DecodedCode:
-    """Decode *code* into canonical instructions (uncached)."""
     raw = _instructions(code)
 
     exit_offsets = {ins.argval for ins in raw if ins.opname == "FOR_ITER"}
@@ -730,11 +729,10 @@ def _decode(code: CodeType) -> DecodedCode:
                 # place; the tracer notes it first. One on a name (x += 1) is
                 # not noted unless its operator is a set's or dict's: a
                 # container a name holds is compared after a branch arm.
+                # index_at has an entry for each instruction up to this
+                # one, so its length is the index of the next.
                 fn = _NB_OPS[iarg]
-                if (
-                    fn in (_op.iand, _op.ior, _op.ixor)
-                    or raw[raw.index(ins) + 1].opname != "STORE_FAST"
-                ):
+                if fn in (_op.iand, _op.ior, _op.ixor) or raw[len(index_at)].opname != "STORE_FAST":
                     out.append([NOTE_INPLACE, None])
                 out.append([BINARY, fn])
         elif name == "BINARY_SLICE":
@@ -873,15 +871,14 @@ _ENDS_FLOW = frozenset(
 )
 
 
+# Map the offset of each MAKE_FUNCTION that makes a generator
+# expression to the offset of the CALL that runs it.
+#
+# The call is the first ``CALL 0`` reached with the function and its
+# iterable on the stack; stack depths come from ``dis.stack_effect``.
+# A generator expression whose call is not found is left out, and is
+# rejected where it is made.
 def _genexpr_calls(raw: list[_Instr]) -> dict[int, int]:
-    """Map the offset of each MAKE_FUNCTION that makes a generator
-    expression to the offset of the CALL that runs it.
-
-    The call is the first ``CALL 0`` reached with the function and its
-    iterable on the stack; stack depths come from ``dis.stack_effect``.
-    A generator expression whose call is not found is left out, and is
-    rejected where it is made.
-    """
     found: dict[int, int] = {}
     for i, ins in enumerate(raw):
         if ins.opname != "MAKE_FUNCTION" or i == 0 or raw[i - 1].opname != "LOAD_CONST":
@@ -920,8 +917,8 @@ def _condition_rank(p: Any) -> tuple[int, bool, int]:
     return (p.lineno or 0, multiline, -width)
 
 
+# Whether the loop target is a single local read inside the body.
 def _loop_var_is_read(out: list[list[Any]], for_idx: int, exit_idx: int) -> bool:
-    """Whether the loop target is a single local read inside the body."""
     store = out[for_idx + 1] if for_idx + 1 < len(out) else None
     if store is None or store[0] != STORE_FAST:
         return True
@@ -984,20 +981,19 @@ _UNREACHED = -2
 _STUCK = -1
 
 
+# Immediate post-dominator of each instruction reached from *start*.
+#
+# Also of each one an earlier result *known* holds. The entry of an
+# instruction not reached is _UNREACHED; of one from which some path never
+# reaches the exit (a loop that never ends) _STUCK, for
+# _join_point_reference to answer. All paths from an instruction to the
+# exit lie among the instructions it reaches, so its post-dominators are
+# the same whatever else is included.
+#
+# This is Cooper, Harvey and Kennedy's iterative dominator algorithm on
+# the reversed graph, from the exit, which takes any order of the
+# instructions in which each comes after one of its successors.
 def _postdominators(instrs: tuple[Instr, ...], start: int, known: list[int] | None) -> list[int]:
-    """Immediate post-dominator of each instruction reached from *start*.
-
-    Also of each one an earlier result *known* holds. The entry of an
-    instruction not reached is _UNREACHED; of one from which some path never
-    reaches the exit (a loop that never ends) _STUCK, for
-    _join_point_reference to answer. All paths from an instruction to the
-    exit lie among the instructions it reaches, so its post-dominators are
-    the same whatever else is included.
-
-    This is Cooper, Harvey and Kennedy's iterative dominator algorithm on
-    the reversed graph, from the exit, which takes any order of the
-    instructions in which each comes after one of its successors.
-    """
     exit_node = len(instrs)
     # As _successors, following each straight run of instructions.
     succs: dict[int, tuple[int, ...]] = {exit_node: ()}
@@ -1085,13 +1081,12 @@ def _postdominators(instrs: tuple[Instr, ...], start: int, known: list[int] | No
     return ipdom
 
 
+# join_point from post-dominator sets of what *branch* reaches.
+#
+# Quadratic in the function's length or worse, per branch: the reference
+# join_point's tree is tested against, and the answer when some path from
+# *branch* never reaches the exit.
 def _join_point_reference(decoded: DecodedCode, branch: int) -> int:
-    """join_point from post-dominator sets of what *branch* reaches.
-
-    Quadratic in the function's length or worse, per branch: the reference
-    join_point's tree is tested against, and the answer when some path from
-    *branch* never reaches the exit.
-    """
     instrs = decoded.instrs
     exit_node = len(instrs)
     reachable: list[int] = []
@@ -1185,10 +1180,10 @@ def region(decoded: DecodedCode, join: int, owned: dict[int, list[Any]]) -> Regi
     return view
 
 
+# The entry of the first of the lists of a function's *instrs* that
+# holds no end (*entry* is the first list's), made after the others if
+# each holds one.
 def _free_list(instrs: Any, entry: list[Any] | None, owned: dict[int, list[Any]]) -> list[Any]:
-    """The entry of the first of the lists of a function's *instrs* that
-    holds no end (*entry* is the first list's), made after the others if
-    each holds one."""
     last = None
     while entry is not None and entry[2]:
         last, entry = entry, entry[3]

@@ -13,6 +13,23 @@ release's `## [X.Y.Z] - Unreleased`, in the pull request that makes it.
 
 ### Added
 
+- **`pulse.call`, a placed call of a function scheduled on its own.** In MLIR,
+  `pulse.call @f(args) <{start_cycles = s, duration_cycles = d}>` runs `@f`
+  at one start time, every timed op of `@f` keeping its start relative to
+  the call's. Lines, tones, measurements and links cross as with
+  `pulse.schedule_block`, and `f64` and `i64` arguments are values at the
+  call. The callee records its length in `pulse.length_cycles`; a call lasts
+  at least that long, and a call that lasts longer holds every line the
+  callee plays on until its end. `pulse-verify` checks a module with placed
+  calls, as IR another compiler writes, by writing the calls out: no call
+  runs back into itself, a callee takes its lines and links as arguments and
+  returns each line, tone and link in the order it takes them, a recorded
+  length is where its last operation ends, and the written-out program
+  passes every check a flat program does (an error inside a call is
+  reported at the callee's operation). `pulse-expand-calls` writes placed
+  calls out. The schedule passes do not place calls yet and refuse them with
+  a message naming the callee; kernels with their own `schedule=` compile as
+  before.
 - **Challenges.** A `challenges/` folder with three starter problems, each with a
   statement, a scorer and reference solutions: find a pi pulse of half the
   calibrated length, measure a hidden qubit's T1 from shots, and find a
@@ -34,6 +51,32 @@ release's `## [X.Y.Z] - Unreleased`, in the pull request that makes it.
   starts a submission, and a seed that is not a whole number gets the usage
   line. `challenges/README.rst` says what a scorer reads and what it cannot
   check.
+- **Idle replacement.** `pulse.compile(k).replace_idle(pulse.IdleReplacement(fill,
+  threshold=100 * pulse.ns))` is the compiled kernel with the kernel
+  `fill(qudit, window)` written into each idle window of its schedules: a
+  stretch of at least the threshold in which a qudit's drive line has no
+  operation, none of its tones plays and its own readout does not run, such
+  as the time a data qudit spends idle while an ancilla is read out (a
+  kernel's own `wait()` is an operation, not a window). A fill shorter than its
+  window is centred with waits (`align=`), a longer one is an error; windows
+  in loops are filled in every round and the loop stays rolled. Every
+  operation of the kernel keeps its start and the program its length under
+  every schedule policy, which compiling checks; under `rcp` and `alap_rcp`
+  a window whose fill would move another operation for lack of a drive lane
+  is left unfilled. `ScheduledKernel.idle_windows` lists each window with
+  what was done there or why it was left alone, and
+  `IdleReplacement(None, threshold=...)` only lists them. In this version a
+  fill drives and waits on its own qudit's drive line. A kernel whose idle
+  windows are not replaced compiles exactly as before.
+- **Exposure.** `ScheduledKernel.exposure` reports what a schedule does to
+  each qudit over time: per qudit and per outermost loop, the cycles of one
+  round in which the qudit is driven, read out and idle, the number of
+  rounds, and the decay and dephasing probability of one round's idle time
+  at the qudit's T1 and T2 star. Loops stay rolled, so it costs the same for
+  two rounds as for a million, and it reads a program from `pulse.load` as
+  it reads a compiled one. A row is marked where the schedule does not fix
+  its figures. Programs that do not read it are unchanged and load none of
+  it.
 - **Error codes.** Every `CompilationError` has a `code`, a
   `pulse.ErrorCode` (`unknown_name`, `wrong_argument`, `runtime_value`,
   `invalid_duration` and the others listed under Errors), so a program or
@@ -207,9 +250,168 @@ release's `## [X.Y.Z] - Unreleased`, in the pull request that makes it.
   the simulator models of each, and one error correction cycle. Its
   numbers, tables and figures are written from the system by a script, and
   a test fails when the page and the system differ.
+- **A shared drive line in the validation corpus.** `backends.validate` runs
+  two more programs: both qudits driven at once with the same envelope on
+  one drive line reaching both (`DriveLine([0, 1], max_concurrent_tones=2)`
+  in place of the controller's drive lines), then read out on the
+  controller's own readout lines. `shared_drive_line_two_tones` runs on the
+  corpus's system, whose qudits differ in frequency, so the line plays two
+  tones; `shared_drive_line_one_tone` runs on a system whose two qudits
+  share a frequency, so a backend whose line plays one tone for all its
+  qudits has a program it can emit. A backend with a drive line per qudit
+  refuses both, which counts as before. Every backend's report has two
+  more lines per format it reads.
+- **A drive of no stated modality.** `Drive(amplitude_scale_rad_per_ns=...)`
+  states the Rabi rate of a pulse of amplitude 1 for a qudit whose drive is
+  not a microwave one, or whose modality the system leaves unsaid: the
+  field moved from `MicrowaveDrive` to its base, `Drive`, which can now be
+  given as a qudit's `drive`. The simulator and the derived calibrations
+  read it as they read a `MicrowaveDrive`'s, which keeps working unchanged,
+  and a system file holds it as `{"kind": "drive", ...}`. A subclass of
+  `Drive` the simulator has no model for is refused, as before; one with
+  fields of its own now states them in `_fields`.
+- **Loading a scheduled function.** `pulse.load(module, entry=..., qudits=...)`
+  turns a scheduled function of a Pulse-dialect module that another compiler
+  wrote (assembly or bytecode) into a `ScheduledKernel`, as `kernel.lower(...)`
+  returns. The schedule is kept as written, verified on its qudits and
+  control system and checked against what the controllers can play (a
+  control system with line delays or program limits is refused for now);
+  `qudits` gives the qudit of each argument and the lines
+  get that quantum system's frequencies. A loaded function may hold loops,
+  branches and calls of classical functions: these are read from the module's
+  `classical.callable` declarations, travel on the control system's links
+  (found by the name the module gives them, or by `links=`), take the
+  control system's dispatch keys as for `compile`, and are checked against
+  their latencies, and `classical=` gives declared
+  functions for them, whose types must agree and whose latency and
+  implementation replace the module's. CUDA-Q QEC's decoder messages in a
+  module (`enqueue_syndromes__3_2`, `get_corrections__3_1`) are read as a
+  kernel's calls of them are compiled. A placed `pulse.call` of another
+  function of the module is written in place.
+  kernel's calls of them are compiled. A call of another function of the
+  module that states its start (`pulse.start_cycles`, provisional) is written
+  in place.
+- **Broadcast drive lines.** A drive line whose one tone reaches several
+  qudits at once, as one antenna or beam over several, is declared on the line:
+  `DriveLine([0, 1, 2], broadcast=True)`. A kernel gets it with
+  `get_drive_line(q)` of any of its qudits or with `get_drive_line(a, b, c)`
+  of all of them, and a drive on it drives every one; the line has one
+  tone, so `shift_phase(line.tone, ...)` turns all of them. The tone is at
+  the frequency the line states (`frequency_hz=`), which may be left out
+  when its qudits share one; each qudit is driven off resonance by the
+  difference from its own. The IR names the line by all its qudits
+  (`pulse.get_drive_line %q0, %q1, %q2`), the simulator drives each of
+  them, and both export formats write the line once, with `"broadcast":
+  true` and its `qudits`, and one event per drive with those `qudits`. A
+  backend must drive every qudit an event lists. A runtime qudit that takes
+  a drive line cannot be bound to a qudit of a broadcast line (checked when
+  it is bound), and `controller.unroll` and `load` do not take such a
+  program or control system yet. `export_to_emulator` lists the line's
+  `qudits` on its drives.
+  Programs and control systems without a broadcast line are unchanged. See
+  "Broadcast lines" in the controller backends guide.
+- **Systems that do not state their frequencies.** A qudit may give its
+  frequency as an offset from a reference the system's qudits share,
+  `PhysicalQudit(1, Offset(1.5e8), t1, t2)` (`Offset` is a `float` that says
+  what it is measured from), or leave it out, `PhysicalQudit(0, None, t1,
+  t2)`, for a control stack that owns the carriers. With offsets, couplings
+  and drives at another qudit's tone compute on the offsets, and every
+  frequency of the system's programs is an offset from the shared
+  reference. Without any, each tone's frequency is an offset from its own
+  qudit's carrier (a line's tone is at 0 Hz), the system declares no
+  couplings (an interaction is a `ResidualZZ`), and a drive at another
+  qudit's tone is an error. `qs.frequency_frame` says which a system is:
+  `"absolute"`, `"shared_reference"` or `"own_carrier"`; the exports' keys
+  are unchanged. A system's qudits give their frequencies all one way,
+  0 Hz is still refused, and a system file holds an offset as
+  `{"offset_hz": ...}` and a missing frequency as `null`. Either kind of
+  program compiles, exports and simulates as the same system with
+  frequencies does, less the reference. What needs a frequency such a
+  system does not state is an error that says so: a readout's
+  `frequency_hz`, `simulate(program, quantum_system=other)` on a system of
+  another `frequency_frame`, a `Calibration` of its couplings and parameter
+  drift; a readout's `frequency_hz` is an `Offset` from the same reference
+  with offsets, and not taken without frequencies. Without frequencies a
+  line several qudits share counts each qudit's tones apart
+  (`max_frequencies_per_line`). An `Offset` equals and is ordered against
+  another `Offset` only. A system whose qudits give their frequencies does
+  no more work than before.
+- **A transition's frequency is the upper level's energy less the lower's.**
+  `SimulationModel.transitions_hz` and `qs.transition_freq` no longer take
+  its absolute value. For
+  levels that ascend, which every shipped model's do, nothing changes; where
+  frequencies are offsets, a qudit's 1-2 tone is its anharmonicity below
+  its 0-1 tone, as it must be, and no longer above.
 
 ### Changed
 
+- **A run-time expression of the controller export names a term that
+  several terms use, and no expression is too deep to export.** A value the
+  program computes at run time from a term it uses twice, forty times over,
+  was written with every use written out (2^40 copies), so its export and
+  its check did not finish; and a value more than 65 operations deep was
+  refused. An expression may now have `"terms": [...]` beside its `op`,
+  `type` and `of`, and `{"term": n}` where term `n` is used. A term is
+  named there when the expression uses it more than once, or when the
+  text would otherwise nest more than 65 terms deep, so an expression of
+  any size exports, in text that grows with its operations and never
+  nests deeper than it could before (65 terms, and up to three more for a
+  length converted to a controller's own cycles). `evaluate_expression` computes a named term once.
+  An expression that shares no term and is not that deep is written as
+  before, in format /1 and /2 alike, and both formats keep their names; a
+  reader that does not know `{"term": n}` fails on it, as on any leaf it
+  does not know. A backend that evaluates through `evaluate_expression`
+  needs no change; one that walks `of` itself must follow `{"term": n}`
+  into `terms`. The `id` of a format /2 waveform whose parameter is such
+  an expression changes with its text.
+- **Coupled qudits are driven at their dressed frequencies.** In a quantum
+  system with couplings, each qudit's drive tone now plays at its 0-1
+  frequency with the couplings included (`qs.qudits[i].dressed_frequency_hz`,
+  computed exactly from the qudit frequencies and coupling strengths) instead
+  of its bare `frequency_hz`. Simulations of coupled qudits no longer show a
+  spurious offset of J^2/Delta per neighbour: up to 66 kHz on
+  `transmon_surface17` and 0.94 MHz on `transmon_lattice:9:grid`. A
+  simulation of some of a system's qudits keeps the share of that shift
+  their left-out neighbours give them. Systems without couplings are
+  unchanged. `pulse.quantum_system(..., frames="bare")` and
+  `qs.replace(frames="bare")` keep the old behaviour.
+
+  What 0.1.0 users see:
+  - Simulations of coupled qudits change. An idling or Ramsey-measured qudit
+    no longer drifts at its neighbours' shift (D5 of `transmon_surface17`
+    by 63 kHz); calibrated gates come out closer to their target; two-qudit
+    experiments show the physical ZZ instead of the ZZ plus that drift. The
+    `several_qubits` tutorial's Ramsey next to an excited neighbour now shows
+    the ZZ alone.
+  - Compiled programs and controller exports of coupled systems carry
+    different drive tone frequencies, and a coupled system's frames are part
+    of what it is: one with `frames="bare"` has another fingerprint.
+  - `frequency_hz`, `qudit_freq`, `transition_freq` and the Hamiltonian keep
+    the bare values.
+  - Where the qudits give their frequencies as `Offset`s from a shared
+    reference, the couplings dress the offsets the same way, and
+    `dressed_frequency_hz` is an `Offset`; where they give none, there are
+    no couplings to dress and it is `None`.
+  - The 1-2 and higher tones of a coupled qudit's drive line are dressed
+    too, each the difference of two of its dressed levels.
+  - A simulation of some of a coupled system's qudits at three levels or
+    more also gives each kept qudit the 1-2 transition it has on the whole
+    system (worked out once per system and set of qudits). Where kept
+    qudits are too near resonance to be given their dressed frequencies
+    without a left-out neighbour, a `RuntimeWarning` (a `PulseWarning`)
+    says how far off they are simulated and which qudits to add.
+
+- **asap and alap place a program over a concurrency limit as rcp does.**
+  On a control system with controllers that declares
+  `max_concurrent_drives` or `max_concurrent_readouts`, a program that
+  `asap` places past one of them is placed as `rcp` places it, and one that
+  `alap` places past one as `alap_rcp` does, when that keeps to every limit;
+  `options.schedule` names the policy that placed it. A program `asap` or
+  `alap` places within its limits keeps its schedule exactly and costs
+  nothing more to compile. Such a program failed to compile before, with a
+  `ControllerLimitError`; it still does when the rcp placement does not keep
+  to every limit either, or when the values a call binds place its pulses
+  past a limit.
 - **Controllers in the printed MLIR carry what they were given.** In
   `pulse.control_system`, each `#pulse.controller` of a system of several
   controllers gives the controller's own facts, in its own cycles, where it
@@ -253,6 +455,28 @@ release's `## [X.Y.Z] - Unreleased`, in the pull request that makes it.
 - **Faster compiles of branches beside long lists of lines.** Tracing a
   measurement-conditioned `if` in a kernel that keeps many lines or tones
   in a list costs less; the programs compiled are unchanged.
+- **A list of lines held under several names costs a branch once.** A
+  measurement-conditioned `if` kept a record of a list of lines or tones for
+  every local name that held it (a further variable, or a called kernel
+  given the list as several arguments) and put the list back between its
+  arms once for each name, so a kernel with many names of one list spent
+  most of its compile there. The `if` keeps one record of each list and
+  puts it back once, and a further name of a list of lines costs it what a
+  further name of any other list does. Programs and errors are as before.
+- **`alap` and `alap_rcp` end a program at its last operation.** They placed
+  every line as late as the forward schedule's end, and that end could come
+  after the last operation: under `rcp` a readout holds its line for the
+  feedback latency after it ends, and a sync in a branch arm waits for the
+  outcome, though neither plays anything. A program then ended up to a
+  feedback latency, or a branch outcome's latency, after its last pulse:
+  with 400 cycles of feedback, a drive played beside a 400-cycle readout ran
+  at 760-800 under `alap_rcp`, an 800-cycle program, and now at 360-400. The
+  hold still makes the next operation on the readout line wait. This changes
+  the output of `alap` and `alap_rcp` on one controller too, always to a
+  program that is no longer; `asap` and `rcp` are unchanged, and so are
+  programs that call a kernel with its own `schedule=`. A tail after the
+  last readout used as a guard before the next shot needs
+  `simulate(reset_time=...)` or an explicit `wait()`.
 - **Measurements keep the kernel's numbers under every schedule.**
   `SimulationResult.measurements` gives each measurement the readout number
   (the kernel's order of its readouts) and loop iteration the kernel gave it,
@@ -349,6 +573,13 @@ release's `## [X.Y.Z] - Unreleased`, in the pull request that makes it.
   as given; to leave them unchecked, set them to `null` in the file.
 - The first compile of a kernel with many measurement-conditioned ifs no
   longer takes time in the square of their number.
+- **The first compile in a process no longer loads the LLVM and
+  cuDensityMat dialects.** The MLIR context that compiled modules share is
+  made with the dialects those modules can hold; `mlir("llvm")` lowers a
+  copy in a context the calling thread keeps for it and gives the text it
+  gave. `pulse.load` of a module that also holds operations, types or
+  attributes of either dialect now fails to read it, naming the dialect;
+  such a module loaded before if the entry and what it calls held none.
 - **Control systems of many controllers build and compile faster.** Checking
   that no `Controller` is listed twice and placing a link's controllers take
   time in proportion to the number of controllers, not its square, and so
@@ -382,6 +613,60 @@ release's `## [X.Y.Z] - Unreleased`, in the pull request that makes it.
   module-level values as before. The quick example of the README and of
   Getting Started now reads the qubit out and runs by calling the kernel,
   which returns the outcome of one simulated shot.
+- **`Controller.max_program_duration` is checked on the schedule.** The
+  limit was also held against the sum of the program's operations op after
+  op, so three 400-cycle drives on three lines at the same time were
+  refused under a limit of 1000 cycles though the program ends at cycle
+  400. The scheduled length now decides, for a compiled kernel and for
+  each call of one whose waits floats set. The sum is kept as an early
+  stop for a kernel no schedule can save: it is an error once it passes
+  the limit times the number of lines the program has taken, which a
+  program that fits cannot. A program on one line is checked as before. A
+  wait whose length is known only when the program runs counts at its
+  highest length in the scheduled check, as it did in the sum, for the
+  lines it holds back: a line that nothing ties to the wait ends when it
+  is scheduled to. A call whose values take the schedule past the limit
+  is still a `ValueError`; its message now gives the scheduled length.
+  Stricter than before: such a wait with no highest length
+  (`bounds=(lowest, None)`, or no `bounds`) that holds back a line of a
+  controller with `max_program_duration` is now a `CompilationError` at
+  the wait, which says to bound it, as under `max_duration_cycles`. It
+  compiled before, counted at its lowest length, and could run past the
+  limit. So is a wait for the answer of a blocking classical function
+  (`latency_mode="blocking"`) that an operation of such a controller
+  follows: the error at the wait says to use `"bounded"` or `"timeout"`.
+  The waits of run-time length are held to the limit by
+  `pulse-classical-check`, which the compiler runs after the schedule for a
+  module with classical calls: a schedule pass run alone
+  (`cudaq-pulse-opt --pulse-schedule-asap`) holds the program to the limit
+  as scheduled only, and a hand-written module that marks a wait
+  `classical.variable` without declaring a classical function is not
+  checked for it.
+- **`viz.save_schedule` takes a path-like path and names its keywords.**
+  `path` may be a `pathlib.Path` as well as a string, and the function takes
+  `figsize` and `title`, the two keywords of `plot_schedule`, where it passed
+  `**kwargs` on to it. Calls that worked still work; a type checker now
+  accepts a `Path` and rejects another keyword, such as `dpi=300`, which
+  type-checked and then raised `TypeError` inside `plot_schedule`.
+- **The emulator export of one controller builds the schedule once.** On a
+  control system of several controllers, `export_to_emulator` built the
+  program's schedule twice, once to check it against the controller's part
+  and once to write the controller's events. It builds it once; the export
+  is the same.
+- **A GPU interval with no long idle stretch is found without building
+  its operators on the host.** With `backend="gpu"`, an interval of 1024
+  steps or more is checked for an idle stretch long enough to propagate
+  exactly on the host. The check built every operator of the interval as a
+  matrix on the whole register, and only then found that no stretch is
+  idle that long, or that the register is too large to keep a
+  superoperator for (more than 40 levels with collapse operators). It now
+  decides from the terms' supports and the register's size first, and
+  builds matrices only for an interval that has such a stretch; of those
+  it no longer builds the drives', which it did not use. For eight qubits
+  driven through 1024 steps the check took 20 ms or more and takes 0.1 ms,
+  and the simulation goes from 7,915 ms to 7,895 ms (NVIDIA RTX A6000,
+  driver 570.211.01, CUDA runtime 12.9.79, cuDensityMat 0.7.1). Which
+  intervals are split, and every result, are as before.
 
 ### Fixed
 
@@ -392,6 +677,176 @@ release's `## [X.Y.Z] - Unreleased`, in the pull request that makes it.
   contents, with no error. The cache now keeps a copy of such an argument's
   contents, or of its attributes, and compares it on every call, as it does
   for the globals a kernel reads.
+- **`simulate` finds its default end without listing a long loop's events.**
+  Without `t_end`, a simulation runs to the latest end of the program's
+  events, and built one `ScheduledEvent` per event of every iteration of
+  every loop to find it. Past 10,000 events, a loop kept as a loop now
+  gives its latest end from its last iteration, and below that no event
+  object is built. The end is the same.
+
+- **CPU simulation of drives apart from each other takes time in proportion
+  to the drives.** The CPU integrator steps each stretch of time in which
+  some drive plays, and asked every drive of the interval at every stretch
+  whether it plays there: n drives with idle time between them made n
+  stretches and n times n questions, so eight times the drives took well
+  over eight times as long. Past three stretches, each is now stepped
+  with its own drives alone, sorted into their stretches once. A drive adds
+  nothing outside its stretch and the drives of a stretch add in the same
+  order, so every density matrix is the same to the last bit. A program
+  whose drives overlap, touch or make up to three stretches is stepped as
+  before, and so is a register of detuned coupled qudits whose idle time
+  is propagated in the frame of its couplings.
+- **Finding a program's segments no longer walks a loop that opens none.**
+  `segments()` went through every iteration of every loop kept as a loop
+  once the program declared a classical function, so a loop of n
+  iterations followed by one call took time in proportion to n to answer,
+  though it adds no segment. A loop that holds no variable wait and no
+  blocking answer is now passed over, at any trip count; one that holds
+  either is walked as before, each iteration opening its segments. The
+  segments are unchanged, as are the segment of every event and call,
+  which are found as before: an export that lists each event's segment
+  still visits every iteration.
+
+- **A value computed through very many operations no longer ends the
+  process.** Several walks over what a value is computed from, or over what
+  it reaches, called themselves once per operation: a run-time selected
+  value that reached a waveform through about a hundred thousand
+  operations, or a call's argument computed through as many on a control
+  system of several controllers, ended the compile with a segmentation
+  fault. The walks of select lowering, of the schedule passes, of
+  `pulse-verify` and of the calls' timing now keep what is still to follow
+  on a stack of their own, in the order they visited it before.
+- **The classical check reports a call whose times run past what it
+  counts in, and no longer writes a long loop of calls out one entry per
+  iteration in two cases.** The check counts and orders the calls of a
+  function from their starts in each iteration. A start that did not fit
+  64 bits was computed anyway (a signed overflow), and a call in a long
+  loop whose last execution did not fit was written out per iteration,
+  which ran out of memory at very many iterations. A call whose start in
+  some iteration, or whose length, is past 2^61 cycles either way is now
+  reported (`the call of 'f' starts, or lasts, past the cycles a schedule
+  counts in`) and left out of the count and the order; a long loop of
+  calls whose last execution is past it is reported with its start, period
+  and count, and its link's calls are then not counted or ordered. Another
+  operation the order of calls depends on (a readout or an answer a call
+  sends, an operation in a branch on an answer) with such a time is
+  reported as well. The bounds on when an answer is taken and on a
+  reaction deadline compare such times as they are. And a call that does
+  not move from one iteration to the next was
+  written out per iteration to count the requests in flight; its
+  executions are now counted together, with the same result.
+
+- **`pulse.load` holds a module's calls and loops to the bounds it states.**
+  Several of the bounds the guide gives for a loaded module could be passed.
+  Calls nest at most 256 deep, but a function already counted for an
+  earlier call was not measured again, so a second call that reached it
+  below 250 more functions loaded. Regions nest at most 256 deep, but only
+  in the module as given: functions that each nest 200 branches around a
+  call of the next loaded as one function nesting thousands. And an
+  operation's own `period_cycles` was not held to 0 to 2^50 cycles, as
+  its start, its duration and a call's periods are. Each is now refused,
+  the first two before any call is written in place. A loop's last trip is
+  held to the range as well: an operation whose start and periods are in
+  it, and whose start in the last trip of its loops is past 2^50 cycles,
+  is refused. So is a timed operation in a loop that gives no trip count
+  to check: one whose bounds or step are not index constants of at most
+  2^50, one that counts unsigned, and a region other than a branch, a
+  schedule block or an `scf.for`. Before, a loop without constant bounds
+  was refused only when a drive, a readout or a wait was directly in it.
+
+- **The classical check no longer visits every corner of the loops around
+  a call.** For a call inside D loops, the check that an answer is taken no
+  earlier than it is due, and the check of a `reaction_deadline_ns`,
+  visited 2^D corners of the loops' iterations, also when every loop ran
+  once: each loop more doubled the work. And from 64 loops on the count
+  of corners no longer fit the number that held it, and only the first
+  corner or the first few were visited: an answer taken too early, or a
+  reaction deadline missed, in an iteration other than the first of such
+  loops was not always reported. Both times change by a fixed amount
+  per iteration of each loop, so the check now takes their extreme from
+  one amount per loop. The iteration and the times an error names are the
+  ones it named before.
+
+- **Compiling many classical calls on several controllers takes time in
+  proportion to the program.** On a control system of several controllers,
+  a call's budget takes the controllers that play what uses its answer: the
+  line a branch on the answer drives, followed through every branch after
+  it. That was followed again for every call, so a program of n calls, each
+  with a branch on its answer, did n times n steps: eight times the calls
+  took 64 times the work. What each value reaches is now followed once for
+  all the calls of a function. No budget, instance or message changes.
+
+- **A classical function of the user's cannot take the name of a decoder
+  message version.** cudaq-pulse names the versions of the CUDA-Q QEC
+  decoder messages by decoder and length (`enqueue_syndromes__0_1`,
+  `get_corrections__3_1`, `reset_decoder__7`), and a program's functions,
+  and the simulation's replay of a decoder's calls, are found by name. A
+  `@pulse.classical` function declared under such a name compiled; after
+  a kernel that used the real message, simulating a kernel that called it
+  failed with a bare `IndexError`, and with arguments of fitting kinds its
+  bits were enqueued into the decoder. Declaring such a function is now
+  an `InvalidValueError` that names the message, and a function whose
+  version for some list lengths would get such a name (a `reset_decoder`
+  of the user's that takes a list) is a `CompilationError` at the call,
+  and an `InvalidValueError` from `specialize()`.
+- **A long loop with a run-time wait each trip is checked against the
+  limits on what plays at once, whatever its trips.** The check counted
+  such a loop trip by trip when its pulses could slide onto another
+  line's, and stopped with an `UnsupportedError` past 1,048,576 copies. It
+  now counts the trips it walks and the rest of the loop's trips together,
+  as one block that slides as far as the last trip can, so a loop of three
+  million rounds with a drive on another line is refused, or passed, in
+  the time of a loop of three. Where a loop cannot be counted so (a pulse
+  on a line its waits do not hold back, a loop inside a loop, and a few
+  other shapes the guide lists) the program is counted trip by trip as
+  before.
+
+- **The limits on what plays at once hold for pulses after a wait of a
+  run-time length or a blocking wait for an answer.** `wait(line, answer,
+  bounds=(16, 4000))` is scheduled at 16 cycles, and what follows it on its
+  lines starts up to 3,984 cycles later in a run, while lines the wait does
+  not hold back keep their times. `max_concurrent_drives`,
+  `max_concurrent_readouts` and a shared line's `max_concurrent_tones`
+  compared the scheduled times only, so a drive after such a wait and a
+  drive on another line passed a limit of one though a run could play them
+  together. They now count pulses as they can slide, at compile and in
+  `controller.check()`: such a program is a `ControllerLimitError` that
+  names the first cycle the pulses can meet and the wait (`2 drives can
+  play at once from cycle 600: what follows the wait on d0 that ends at
+  cycle 117 (up to 3984 cycles later) ...`). Sync the lines after the wait,
+  or give it bounds that keep the pulses apart. A blocking wait counts as
+  such a wait without an upper end. A program without such a wait, and one
+  whose lines all wait together, is checked as before.
+- **A value computed from a term it uses several times, or through
+  thousands of operations, compiles.** `tau = tau + tau` written a few dozen
+  times did not finish tracing: forty such lines are forty operations, but
+  written out they are 2^40 terms, and the tracer walked the value as
+  written out. A wait length or an amplitude summed in a loop of 200 rounds
+  failed with a `SyntaxError` from inside the compiler, one of 1,100 rounds
+  with a `RecursionError`. Every walk of a value now visits an operation
+  once and without recursion, and an error names a shared term once:
+  `the wait length t2 + t2 with t1 = tau * 2.0, t2 = t1 + t1`. The same
+  holds for conditions built with `&` and `|` from answers of classical
+  calls, however long the chain; and a condition that several parts of
+  another use, also through `^`, `==` and `!=`, is computed once in the
+  program, where it was computed once per use. A value that shares nothing
+  compiles to the same program and reads the same in errors. The
+  controller export and the check write such a value with each term once
+  too (see Changed).
+- **A time in a runtime `list[float]` argument is refused, as for a `float`
+  parameter.** `[100 * pulse.ns]` was taken as its nanoseconds and used as
+  that many clock cycles, so a scan of waits written with units played half
+  of each wait on a 2 GHz clock, with no error. It is now an
+  `InvalidTypeError` that names the element, and so is an element that is
+  not a number, which said only that the argument was a list.
+- **A loop that hands each classical call's answer to the next call now
+  compiles.** With a wait whose length is an answer in it
+  (`tau = f.submit(tau).result()` then `wait(line, tau, bounds=...)`), the
+  time to schedule doubled with every round, so a loop of some thirty rounds
+  did not finish. To find a wait's length the scheduler went back from the
+  answer through the call to every call before it, by two ways each. It now
+  follows arithmetic only, and computes a term that others share once. The
+  schedules are the same.
 - **A kernel with many measurement-conditioned `if`s no longer takes memory
   and time that grow with the square of their number to trace.** Each `if`
   kept its own copy of the whole kernel's instructions, so a kernel of n
@@ -474,6 +929,15 @@ release's `## [X.Y.Z] - Unreleased`, in the pull request that makes it.
   once for each content it has had. An installed description, loaded by
   its name, is still kept by its file's modification time: nothing writes
   those while a program runs.
+- **Bounding what a round plays at once no longer takes time that grows
+  with the square of its pulses, where none of them is in a branch.** For
+  a loop kept as a loop, the check of `max_concurrent_drives` and
+  `max_concurrent_readouts` first bounds what one round plays at once. The
+  bound went through every pulse in flight at each pulse, as the count
+  after it did before it was changed. It now keeps them by their ends and
+  the sum of what they stand for as they come and go, and where none in
+  flight is in a branch that sum is the bound. Where one is, those in
+  flight are gone through as before. What it finds is the same.
 - **Checking a program against a control system of many controllers no
   longer takes time that grows with their number times the program.**
   Compiling for several controllers checked each one on a copy of every
@@ -501,6 +965,15 @@ release's `## [X.Y.Z] - Unreleased`, in the pull request that makes it.
   is in, and refused a program whose arms never play together ("plays 2
   tones at once ... and does so 39 more times"). Such a loop is now
   counted by walking its rounds, which tells the arms apart.
+- **A long line after a branch on a classical answer no longer ends the
+  process.** On several controllers the scheduler finds which controllers
+  take a call's answer by following what the answer reaches: a branch on
+  it gives the lines its arms touch, and each line was followed through
+  every later sync and branch on it by a call per operation. About 34,000
+  operations on such a line (loops written out with a large
+  `unroll_threshold`, or a kernel that long) overflowed the stack: a
+  segmentation fault, no Python error. The lines are followed without
+  recursion, to the same controllers.
 - **A value that is not a real number fails at `bind()`, on every bind.**
   `module.bind([True, 1e6])`, or a str, a complex number or `None` for a
   value, was an `InvalidTypeError` at `bind()` only on the first bind of a
@@ -797,6 +1270,11 @@ release's `## [X.Y.Z] - Unreleased`, in the pull request that makes it.
   spacing, detectors and calls that hold the lines. The pulses of an arm
   are paired only with those that can play with them, as when the loop is
   unrolled.
+- **A function with many augmented assignments (`x += 1`) no longer takes
+  time that grows with the square of their number to decode.** For each one
+  the decoder looked for the instruction after it from the function's first
+  instruction. It now reads that instruction directly. What is decoded is
+  the same.
 
 ## [0.1.0] - 2026-11-13
 

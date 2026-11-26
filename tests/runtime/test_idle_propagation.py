@@ -242,3 +242,63 @@ def test_short_gpu_idles_stay_on_the_device(gpu_on_cpu, advances):
     # One run of the whole evolution: its 1200 steps, of which 400 idle.
     assert [s for _, _, s in _CpuStandIn.runs] == [round(60.0 / _DT_NS)]
     assert simulate_module._GpuBackend is _CpuStandIn
+
+
+@pytest.fixture
+def probes(monkeypatch):
+    """Of each call of ``_idle.through_gpu``: whether it propagated a stretch
+    on the host, and the operators on the whole register built during it
+    (for a call that declined, the ones the check built; a call that splits
+    also runs the stand-in's device runs, which build their own)."""
+    calls = []
+    built = []
+    through_gpu, full_operator = _idle.through_gpu, simulate_module._full_operator
+
+    def counted(factors, dims):
+        if built:
+            built[-1] += 1
+        return full_operator(factors, dims)
+
+    def probed(*args):
+        built.append(0)
+        try:
+            result = through_gpu(*args)
+        finally:
+            count = built.pop()
+        calls.append((result is not None, count))
+        return result
+
+    monkeypatch.setattr(simulate_module, "_full_operator", counted)
+    monkeypatch.setattr(_idle, "through_gpu", probed)
+    return calls
+
+
+def test_a_gpu_interval_driven_throughout_builds_no_host_operators(gpu_on_cpu, advances, probes):
+    system = _system(2)
+
+    @pulse.kernel
+    def driven(q0, q1):
+        get_drive_line(q1)
+        drive(get_drive_line(q0), square(200, 0.01))
+
+    lowered = _lowered(system, driven, system.qudits[0], system.qudits[1])
+    pulse.simulate(lowered, backend="gpu", levels=2, dt_ns=_DT_NS)
+    # One interval of 2000 steps with no idle stretch: asked once, declined
+    # from the drive's support alone, and run whole on the device.
+    assert probes == [(False, 0)]
+    assert not advances
+    assert [s for _, _, s in _CpuStandIn.runs] == [2000]
+
+
+def test_a_dissipative_gpu_register_above_the_cutoff_builds_no_host_operators(
+    gpu_on_cpu, advances, probes
+):
+    system = _system(3)
+    assert 4**3 > _idle.MAX_DISSIPATIVE_DIM
+    lowered = _lowered(system, idle3, *system.qudits[0:3], 120.0)
+    pulse.simulate(lowered, backend="gpu", levels=4, dt_ns=_DT_NS)
+    # The whole interval is idle, 1200 steps, but the register keeps no
+    # superoperator: declined on its size, and stepped on the device.
+    assert probes == [(False, 0)]
+    assert not advances
+    assert [s for _, _, s in _CpuStandIn.runs] == [1200]

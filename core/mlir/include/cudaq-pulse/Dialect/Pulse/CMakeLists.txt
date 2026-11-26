@@ -2,8 +2,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 set(LLVM_TARGET_DEFINITIONS PulseOps.td)
-mlir_tablegen(PulseOps.h.inc -gen-op-decls)
-mlir_tablegen(PulseOps.cpp.inc -gen-op-defs)
+# pulse.call is generated on its own (PulseCallOp.*.inc, compiled in
+# PulseCallOp.cpp), so the other ops' generated code is as it was. The
+# pattern has no `$` anchor: tablegen's command is not VERBATIM, so a `$`
+# would reach the build tool. No other op's name starts with pulse.call.
+mlir_tablegen(PulseOps.h.inc -gen-op-decls -op-exclude-regex=^pulse[.]call)
+mlir_tablegen(PulseOps.cpp.inc -gen-op-defs -op-exclude-regex=^pulse[.]call)
+mlir_tablegen(PulseCallOp.h.inc -gen-op-decls -op-include-regex=^pulse[.]call)
+mlir_tablegen(PulseCallOp.cpp.inc -gen-op-defs -op-include-regex=^pulse[.]call)
 mlir_tablegen(PulseDialect.h.inc -gen-dialect-decls)
 mlir_tablegen(PulseDialect.cpp.inc -gen-dialect-defs)
 

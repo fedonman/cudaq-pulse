@@ -36,7 +36,7 @@
      "title": "LLVM IR",
      "sub": "mlir(\"llvm\")",
      "count": "88 llvm.call",
-     "detail": "1641 operations",
+     "detail": "1643 operations",
      "role": "q",
      "step": 3,
      "from": 2
@@ -74,9 +74,9 @@
      "spans": {}
     },
     {
-     "label": "LLVM IR: 1641 operations, 88 of them calls into cuDensityMat",
+     "label": "LLVM IR: 1643 operations, 88 of them calls into cuDensityMat",
      "short": "LLVM IR",
-     "say": "LLVM IR turns each of its operations into a call into the cuDensityMat runtime. It holds 1641 operations, 88 of them calls into cuDensityMat.",
+     "say": "LLVM IR turns each of its operations into a call into the cuDensityMat runtime. It holds 1643 operations, 88 of them calls into cuDensityMat.",
      "spans": {}
     },
     {

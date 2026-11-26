@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING, Any
 import cudaq_pulse as pulse
 
 from ._device import Qudit
-from ._system import Controller, ControlSystem, ReadoutLine
+from ._system import Controller, ControlSystem, DriveLine, ReadoutLine
 from .backends import Backend, IncompatibleBackendError
 from .controller import (
     _FORMATS,
@@ -241,6 +241,22 @@ def _build(stretch: int = 1) -> dict[str, Kernel[[Qudit, Qudit]]]:
         readout(b, square(80 * s, 0.05))
 
     @pulse.kernel
+    def shared_drive_line(q: Qudit, r: Qudit) -> None:
+        # Both tones of one drive line at once, with the same envelope:
+        # two frequencies on the corpus's system, one where its qudits
+        # share a frequency.
+        d = get_drive_line(q)
+        e = get_drive_line(r)
+        a = get_readout_line(q)
+        b = get_readout_line(r)
+        sync(d, e)
+        drive(d, gaussian(32 * s, 0.5, 8.0 * s))
+        drive(e, gaussian(32 * s, 0.5, 8.0 * s))
+        sync(d, e, a, b)
+        readout(a, square(80 * s, 0.05))
+        readout(b, square(80 * s, 0.05))
+
+    @pulse.kernel
     def several_controllers(q: Qudit, r: Qudit) -> None:
         d = get_drive_line(q)
         e = get_drive_line(r)
@@ -267,6 +283,8 @@ def _build(stretch: int = 1) -> dict[str, Kernel[[Qudit, Qudit]]]:
         "runtime": runtime,
         "runtime_frequency": runtime_frequency,
         "shared_line": shared_line,
+        "shared_drive_line_two_tones": shared_drive_line,
+        "shared_drive_line_one_tone": shared_drive_line,
         "several_controllers": several_controllers,
     }
 
@@ -391,6 +409,17 @@ def _shared_line(system: ControlSystem) -> ControlSystem:
     return ControlSystem(controllers=[controller])
 
 
+def _shared_drive_line(system: ControlSystem) -> ControlSystem:
+    """*system*'s first controller alone, its drive lines one line reaching
+    both qudits and playing both tones at once; its readout lines as they
+    are (one for each qudit when it lists none)."""
+    base = system.controllers[0]
+    line = DriveLine(list(range(_QUDITS)), max_concurrent_tones=_QUDITS)
+    readouts = list(base.readout_lines) or list(range(_QUDITS))
+    controller = dataclasses.replace(base, drive_lines=[line], readout_lines=readouts)
+    return ControlSystem(controllers=[controller])
+
+
 def _several_controllers(system: ControlSystem) -> ControlSystem:
     """Two controllers made from *system*'s first: one drives qudit 0 and
     reads out both qudits on one feedline, the other drives qudit 1; they
@@ -410,21 +439,29 @@ def _several_controllers(system: ControlSystem) -> ControlSystem:
 # made from the one validated.
 _WIRED: Mapping[str, Callable[[ControlSystem], ControlSystem]] = {
     "shared_line": _shared_line,
+    "shared_drive_line_two_tones": _shared_drive_line,
+    "shared_drive_line_one_tone": _shared_drive_line,
     "several_controllers": _several_controllers,
 }
 
 
-def _device(system: ControlSystem) -> Any:
+def _device(system: ControlSystem, spacing_hz: float = 1.5e8) -> Any:
+    """The corpus's quantum system: its qudits *spacing_hz* apart."""
     limits = _one(system)
     clock = limits.clock_ghz if limits is not None and limits.clock_ghz else 1.0
     return pulse.quantum_system(
-        name="validation",
+        name="validation" if spacing_hz else "validation-one-frequency",
         qudits={
-            i: PhysicalQudit(i, 5.0e9 + 1.5e8 * i, 50.0, 30.0, anharmonicity_hz=-2.5e8)
+            i: PhysicalQudit(i, 5.0e9 + spacing_hz * i, 50.0, 30.0, anharmonicity_hz=-2.5e8)
             for i in range(_QUDITS)
         },
         clock_ghz=clock,
     )
+
+
+# The programs that run on a quantum system of their own: both qudits at one
+# frequency, so that the two tones of the shared drive line are one.
+_ONE_FREQUENCY = frozenset({"shared_drive_line_one_tone"})
 
 
 def _formats(backend: Backend) -> list[str]:
@@ -645,9 +682,10 @@ def validate(
         if parts and FORMAT not in formats:
             # Format /2 is written for one controller.
             continue
+        on_dev = _device(system, spacing_hz=0.0) if kind in _ONE_FREQUENCY else dev
         try:
-            compiled = pulse.compile(kernel, quantum_system=dev, control_system=on)
-            lowered = compiled.lower(*dev.qudits[:_QUDITS])
+            compiled = pulse.compile(kernel, quantum_system=on_dev, control_system=on)
+            lowered = compiled.lower(*on_dev.qudits[:_QUDITS])
         except ControllerLimitError as e:
             report._add("SKIP", str(kind), f"exceeds the controller's limits: {e.violations[0]}")
             continue

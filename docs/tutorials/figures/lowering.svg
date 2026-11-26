@@ -5,7 +5,7 @@
 -->
 <svg xmlns="http://www.w3.org/2000/svg" class="pv-svg" role="img" aria-labelledby="title desc" viewBox="0 0 760 232">
  <title id="title">One program, lowered for the GPU and exported</title>
- <desc id="desc">One program, lowered for the GPU and exported. The kernel as written: pulses, waits and syncs on its lines. It holds 21 operations. QOp writes the pair's Hamiltonian and the Lindblad terms of its decay. It holds 82 operations. The cuDensityMat dialect is the cuDensityMat API as IR. It holds 122 operations. LLVM IR turns each of its operations into a call into the cuDensityMat runtime. It holds 1641 operations, 88 of them calls into cuDensityMat. From the same Pulse MLIR, the program exports for a controller as 5 events. Only the last steps differ.</desc>
+ <desc id="desc">One program, lowered for the GPU and exported. The kernel as written: pulses, waits and syncs on its lines. It holds 21 operations. QOp writes the pair's Hamiltonian and the Lindblad terms of its decay. It holds 82 operations. The cuDensityMat dialect is the cuDensityMat API as IR. It holds 122 operations. LLVM IR turns each of its operations into a call into the cuDensityMat runtime. It holds 1643 operations, 88 of them calls into cuDensityMat. From the same Pulse MLIR, the program exports for a controller as 5 events. Only the last steps differ.</desc>
  <style>.pv-svg { --pv-drive: #5b8c00; --pv-q: #3d6fa3; --pv-readout: #c2185b; --pv-classical: #00796b; --pv-text: #1a1a1a; --pv-muted: #5c636a; --pv-grid: #e8e8e8; --pv-rule: #80868c; --pv-panel: rgba(0, 0, 0, 0.03); --pv-on-pill: #ffffff; --pv-page: #ffffff; display: block; width: 100%; height: auto; font-family: var(--pst-font-family-base, NVIDIA, Arial, Helvetica, sans-serif);}
 .pv-svg.pv-dark { --pv-drive: #76b900; --pv-q: #8fb8e8; --pv-readout: #f06292; --pv-classical: #4dd0c4; --pv-text: #eeeeee; --pv-muted: #b4bac1; --pv-grid: #2c2f33; --pv-rule: #6b7177; --pv-panel: rgba(255, 255, 255, 0.04); --pv-on-pill: #0b0b0b; --pv-page: #111111;}
 .pv-svg text { fill: var(--pv-text); font-size: 12px;}
@@ -53,7 +53,7 @@
    <text x="591.5" y="51" class="pv-title pv-q-text">LLVM IR</text>
    <text x="591.5" y="66" class="pv-tiny pv-code">mlir(&quot;llvm&quot;)</text>
    <text x="591.5" y="84" class="pv-node-text">88 llvm.call</text>
-   <text x="591.5" y="99" class="pv-tiny">1641 operations</text>
+   <text x="591.5" y="99" class="pv-tiny">1643 operations</text>
    <rect x="14" y="148" width="163.5" height="74" rx="5" class="pv-stage pv-stage-link pv-current"/>
    <text x="23" y="165" class="pv-title pv-link-text">controller export</text>
    <text x="23" y="180" class="pv-tiny pv-code">export_to_controller()</text>

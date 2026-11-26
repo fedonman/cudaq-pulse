@@ -92,7 +92,7 @@ def judge(turn, gap_ns, reply, system, qudit, tone):
         peak = max(abs(sample) for sample in drive["samples"])
         if peak > MAX_AMPLITUDE:
             return f"a sample of the {name} pulse reaches {digits(peak, MAX_AMPLITUDE)}; the bench plays at most {MAX_AMPLITUDE:g}"
-        detuning_mhz = (drive["frequency_hz"] - system.qudit_freq[qudit.index]) / 1e6
+        detuning_mhz = (drive["frequency_hz"] - qudit.dressed_frequency_hz) / 1e6
         if abs(detuning_mhz) > MAX_DETUNING_HZ / 1e6:
             return f"the {name} pulse is {detuning_mhz:+g} MHz from the qubit; the limit is {MAX_DETUNING_HZ / 1e6:g} MHz"
         if len(drive["samples"]) > MAX_PULSE_NS * clock:
@@ -154,7 +154,7 @@ def warm_up(system, qudit):
         0.165 * turn * math.exp(-((k - count / 2) ** 2) / (2.0 * 16.0**2)) for k in range(count)
     ]
     drive = {"qudit": qudit.index, "re": shape, "im": [0.0] * count, "depends": []}
-    drive.update(frequency_hz=float(system.qudit_freq[qudit.index]), phase_rad=0.0)
+    drive.update(frequency_hz=float(qudit.dressed_frequency_hz), phase_rad=0.0)
     second = count + round(gap_ns * system.clock_ghz)
     reply = {
         "drives": [{**drive, "start_cycles": 0}, {**drive, "start_cycles": second}],

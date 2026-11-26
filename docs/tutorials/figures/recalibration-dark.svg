@@ -2,7 +2,7 @@
    SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
    SPDX-License-Identifier: Apache-2.0
 -->
-<svg role="img" aria-labelledby="title desc" xmlns:xlink="http://www.w3.org/1999/xlink" width="429.15pt" height="103.06pt" viewBox="0 0 429.15 103.06" xmlns="http://www.w3.org/2000/svg" version="1.1">
+<svg role="img" aria-labelledby="title desc" xmlns:xlink="http://www.w3.org/1999/xlink" width="415.32pt" height="103.06pt" viewBox="0 0 415.32 103.06" xmlns="http://www.w3.org/2000/svg" version="1.1">
  <title id="title">The drive follows the recalibration</title>
  <desc id="desc">The frequency of excite's drive in its export for qudit 0: 5100 MHz before the recalibration and 5102 MHz after, 2 MHz higher, with the same kernel.</desc>
  <defs>
@@ -11,8 +11,8 @@
  <g id="figure_1">
   <g id="patch_1">
    <path d="M 0 103.06
-L 429.15 103.06
-L 429.15 0
+L 415.32 103.06
+L 415.32 0
 L 0 0
 L 0 103.06
 z
@@ -20,11 +20,11 @@ z
   </g>
   <g id="axes_1">
    <g id="patch_2">
-    <path d="M 13.69 72.18
-L 415.45 72.18
-L 415.45 2.88
-L 13.69 2.88
-L 13.69 72.18
+    <path d="M 10.68 72.18
+L 412.44 72.18
+L 412.44 2.88
+L 10.68 2.88
+L 10.68 72.18
 z
 " style="fill: none"/>
    </g>
@@ -47,104 +47,94 @@ L 0 3
     <g id="xtick_2">
      <g id="line2d_2">
       <g>
-       <use xlink:href="#mfe68c2d5a2" x="80.65" y="72.18" style="fill: #5a6066; stroke: #5a6066; stroke-width: 0.8"/>
+       <use xlink:href="#mfe68c2d5a2" x="80.66" y="72.18" style="fill: #5a6066; stroke: #5a6066; stroke-width: 0.8"/>
       </g>
      </g>
      <g id="text_2">
-      <text style="font-size: 8.5px; font-family:NVIDIA, Arial, Helvetica, sans-serif; text-anchor: middle; fill: #b4bac1" x="80.65" y="85.13" transform="rotate(-0 80.65 85.13)">5099</text>
+      <text style="font-size: 8.5px; font-family:NVIDIA, Arial, Helvetica, sans-serif; text-anchor: middle; fill: #b4bac1" x="80.66" y="85.13" transform="rotate(-0 80.66 85.13)">5099</text>
      </g>
     </g>
     <g id="xtick_3">
      <g id="line2d_3">
       <g>
-       <use xlink:href="#mfe68c2d5a2" x="147.61" y="72.18" style="fill: #5a6066; stroke: #5a6066; stroke-width: 0.8"/>
+       <use xlink:href="#mfe68c2d5a2" x="147.62" y="72.18" style="fill: #5a6066; stroke: #5a6066; stroke-width: 0.8"/>
       </g>
      </g>
      <g id="text_3">
-      <text style="font-size: 8.5px; font-family:NVIDIA, Arial, Helvetica, sans-serif; text-anchor: middle; fill: #b4bac1" x="147.61" y="85.13" transform="rotate(-0 147.61 85.13)">5100</text>
+      <text style="font-size: 8.5px; font-family:NVIDIA, Arial, Helvetica, sans-serif; text-anchor: middle; fill: #b4bac1" x="147.62" y="85.13" transform="rotate(-0 147.62 85.13)">5100</text>
      </g>
     </g>
     <g id="xtick_4">
      <g id="line2d_4">
       <g>
-       <use xlink:href="#mfe68c2d5a2" x="214.57" y="72.18" style="fill: #5a6066; stroke: #5a6066; stroke-width: 0.8"/>
+       <use xlink:href="#mfe68c2d5a2" x="214.59" y="72.18" style="fill: #5a6066; stroke: #5a6066; stroke-width: 0.8"/>
       </g>
      </g>
      <g id="text_4">
-      <text style="font-size: 8.5px; font-family:NVIDIA, Arial, Helvetica, sans-serif; text-anchor: middle; fill: #b4bac1" x="214.57" y="85.13" transform="rotate(-0 214.57 85.13)">5101</text>
+      <text style="font-size: 8.5px; font-family:NVIDIA, Arial, Helvetica, sans-serif; text-anchor: middle; fill: #b4bac1" x="214.59" y="85.13" transform="rotate(-0 214.59 85.13)">5101</text>
      </g>
     </g>
     <g id="xtick_5">
      <g id="line2d_5">
       <g>
-       <use xlink:href="#mfe68c2d5a2" x="281.53" y="72.18" style="fill: #5a6066; stroke: #5a6066; stroke-width: 0.8"/>
+       <use xlink:href="#mfe68c2d5a2" x="281.55" y="72.18" style="fill: #5a6066; stroke: #5a6066; stroke-width: 0.8"/>
       </g>
      </g>
      <g id="text_5">
-      <text style="font-size: 8.5px; font-family:NVIDIA, Arial, Helvetica, sans-serif; text-anchor: middle; fill: #b4bac1" x="281.53" y="85.13" transform="rotate(-0 281.53 85.13)">5102</text>
+      <text style="font-size: 8.5px; font-family:NVIDIA, Arial, Helvetica, sans-serif; text-anchor: middle; fill: #b4bac1" x="281.55" y="85.13" transform="rotate(-0 281.55 85.13)">5102</text>
      </g>
     </g>
     <g id="xtick_6">
      <g id="line2d_6">
       <g>
-       <use xlink:href="#mfe68c2d5a2" x="348.49" y="72.18" style="fill: #5a6066; stroke: #5a6066; stroke-width: 0.8"/>
+       <use xlink:href="#mfe68c2d5a2" x="348.52" y="72.18" style="fill: #5a6066; stroke: #5a6066; stroke-width: 0.8"/>
       </g>
      </g>
      <g id="text_6">
-      <text style="font-size: 8.5px; font-family:NVIDIA, Arial, Helvetica, sans-serif; text-anchor: middle; fill: #b4bac1" x="348.49" y="85.13" transform="rotate(-0 348.49 85.13)">5103</text>
+      <text style="font-size: 8.5px; font-family:NVIDIA, Arial, Helvetica, sans-serif; text-anchor: middle; fill: #b4bac1" x="348.52" y="85.13" transform="rotate(-0 348.52 85.13)">5103</text>
      </g>
     </g>
-    <g id="xtick_7">
-     <g id="line2d_7">
-      <g>
-       <use xlink:href="#mfe68c2d5a2" x="415.45" y="72.18" style="fill: #5a6066; stroke: #5a6066; stroke-width: 0.8"/>
-      </g>
-     </g>
-     <g id="text_7">
-      <text style="font-size: 8.5px; font-family:NVIDIA, Arial, Helvetica, sans-serif; text-anchor: middle; fill: #b4bac1" x="415.45" y="85.13" transform="rotate(-0 415.45 85.13)">5104</text>
-     </g>
-    </g>
-    <g id="text_8">
-     <text style="font-size: 9px; font-family:NVIDIA, Arial, Helvetica, sans-serif; text-anchor: middle; fill: #b4bac1" x="214.57" y="98.01" transform="rotate(-0 214.57 98.01)">drive frequency in the export (MHz)</text>
+    <g id="text_7">
+     <text style="font-size: 9px; font-family:NVIDIA, Arial, Helvetica, sans-serif; text-anchor: middle; fill: #b4bac1" x="211.56" y="98.01" transform="rotate(-0 211.56 98.01)">drive frequency in the export (MHz)</text>
     </g>
    </g>
    <g id="matplotlib.axis_2"/>
-   <g id="line2d_8">
-    <path d="M 147.61 72.18
-L 147.61 25.98
-" clip-path="url(#p1b82e030cd)" style="fill: none; stroke: #b4bac1; stroke-width: 2.2; stroke-linecap: round"/>
+   <g id="line2d_7">
+    <path d="M 144.61 72.18
+L 144.61 25.98
+" clip-path="url(#p86c9aaccae)" style="fill: none; stroke: #b4bac1; stroke-width: 2.2; stroke-linecap: round"/>
    </g>
-   <g id="line2d_9">
-    <path d="M 281.53 72.18
-L 281.53 25.98
-" clip-path="url(#p1b82e030cd)" style="fill: none; stroke: #76b900; stroke-width: 2.2; stroke-linecap: round"/>
+   <g id="line2d_8">
+    <path d="M 278.51 72.18
+L 278.51 25.98
+" clip-path="url(#p86c9aaccae)" style="fill: none; stroke: #76b900; stroke-width: 2.2; stroke-linecap: round"/>
    </g>
    <g id="patch_3">
-    <path d="M 13.69 72.18
-L 415.45 72.18
+    <path d="M 10.68 72.18
+L 412.44 72.18
 " style="fill: none; stroke: #5a6066; stroke-width: 0.8; stroke-linejoin: miter; stroke-linecap: square"/>
    </g>
-   <g id="text_9">
-    <text style="font-size: 8px; font-family:NVIDIA, Arial, Helvetica, sans-serif; text-anchor: middle; fill: #b4bac1" x="147.61" y="21.74" transform="rotate(-0 147.61 21.74)">before: 5100 MHz</text>
+   <g id="text_8">
+    <text style="font-size: 8px; font-family:NVIDIA, Arial, Helvetica, sans-serif; text-anchor: middle; fill: #b4bac1" x="144.61" y="21.74" transform="rotate(-0 144.61 21.74)">before: 5100 MHz</text>
    </g>
-   <g id="text_10">
-    <text style="font-size: 8px; font-family:NVIDIA, Arial, Helvetica, sans-serif; text-anchor: middle; fill: #76b900" x="281.53" y="21.74" transform="rotate(-0 281.53 21.74)">after: 5102 MHz</text>
+   <g id="text_9">
+    <text style="font-size: 8px; font-family:NVIDIA, Arial, Helvetica, sans-serif; text-anchor: middle; fill: #76b900" x="278.51" y="21.74" transform="rotate(-0 278.51 21.74)">after: 5102 MHz</text>
    </g>
    <g id="patch_4">
-    <path d="M 149.61 51.39
-Q 214.57 51.39 278.41 51.39
+    <path d="M 146.61 51.39
+Q 211.56 51.39 275.39 51.39
 " style="fill: none; stroke: #eeeeee; stroke-linecap: round"/>
-    <path d="M 274.81 49.59
-L 278.41 51.39
-L 274.81 53.19
+    <path d="M 271.79 49.59
+L 275.39 51.39
+L 271.79 53.19
 z
 " style="fill: #eeeeee; stroke: #eeeeee; stroke-linecap: round"/>
    </g>
   </g>
  </g>
  <defs>
-  <clipPath id="p1b82e030cd">
-   <rect x="13.69" y="2.88" width="401.76" height="69.3"/>
+  <clipPath id="p86c9aaccae">
+   <rect x="10.68" y="2.88" width="401.76" height="69.3"/>
   </clipPath>
  </defs>
 </svg>

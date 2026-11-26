@@ -134,5 +134,5 @@ for excite in (0, 1):
     print(f"{neighbour:12}  D1 excited: {excited:.3f}")
 
 # Prints:
-#   X2 in ground  D1 excited: 0.677
-#   X2 excited    D1 excited: 0.587
+#   X2 in ground  D1 excited: 0.845
+#   X2 excited    D1 excited: 0.829

@@ -18,6 +18,16 @@ from cudaq_pulse.controller import ControllerLimitError, DriveLine, ReadoutLine
 _RCP = ("rcp", "alap_rcp")
 
 
+@pytest.fixture(autouse=True)
+def _checked_as_placed(monkeypatch):
+    """These tests are of the check: asap and alap keep the schedule they
+    place, which compile would otherwise place again as rcp does past a
+    limit (test_placed_by_limits.py)."""
+    from cudaq_pulse import compiler
+
+    monkeypatch.setattr(compiler, "_PLACED_BY_LIMITS", {})
+
+
 @pulse.kernel
 def drives_then_readouts(qs: list):
     for q in qs:
@@ -390,3 +400,59 @@ def test_the_sweep_counts_what_counting_every_pulse_in_flight_does(seed):
             count = _AtOnce(limit, [], {})
             count.sweep(played)
             assert (count.first, count.at_first, count.most) == _counted_plainly(limit, played)
+
+
+def _bounded_plainly(count, items, floor, weights):
+    """What ``_AtOnce._bound`` gives, the plain way: the entries by start,
+    those in flight kept in a list made again at every entry."""
+    from cudaq_pulse._concurrency import _together
+
+    entries = sorted(
+        (
+            (*count.timed[i], count._arms(count.events[i]["conditions"], ()), weights[i])
+            for i, _, _ in items
+        ),
+        key=lambda e: (e[0], e[1]),
+    )
+    most = 0
+    active = []
+    for lo, hi, arms, weight in entries:
+        active = [a for a in active if a[0] > lo]
+        active.append((hi, arms, weight))
+        if sum(a[2] for a in active) <= max(most, floor):
+            continue
+        most = max(most, _together([(a[1], a[2]) for a in active]))
+    return most
+
+
+@pytest.mark.parametrize("seed", range(40))
+def test_the_bound_is_what_listing_every_pulse_in_flight_gives(seed):
+    # Starts tie, a pulse ends at the cycle another starts, pulses of no
+    # length, pulses in the arms of up to three branches or in none, and
+    # entries that stand for several pulses (a loop's weight).
+    from cudaq_pulse._concurrency import _AtOnce
+
+    class _Weighted(_AtOnce):
+        def _weight(self, node):
+            return self.weights[node]
+
+    rng = random.Random(1000 + seed)
+    for _ in range(60):
+        events, timed, weights = [], {}, {}
+        branched = rng.random() < 0.7
+        for index in range(rng.randrange(1, 40)):
+            start = rng.randrange(0, 24) * 4
+            conditions = [
+                {"branch": b, "arm": rng.choice(("then", "else"))}
+                for b in range(3)
+                if branched and rng.random() < 0.3
+            ]
+            events.append({"index": index, "conditions": conditions})
+            timed[index] = (start, start + rng.choice((0, 4, 4, 8, 20, 60)))
+            weights[index] = rng.choice((1, 1, 1, 2, 5, 0))
+        items = [(index, 0, ()) for index in timed]
+        rng.shuffle(items)
+        for floor in (0, 1, 2, 5, 12):
+            count = _Weighted(floor, events, timed)
+            count.weights = weights
+            assert count._bound(items, floor) == _bounded_plainly(count, items, floor, weights)

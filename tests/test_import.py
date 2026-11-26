@@ -47,6 +47,23 @@ def test_import_and_compile_do_not_load_numpy_or_the_gpu_runtime(tmp_path):
     assert loaded == "[]"
 
 
+def test_exposure_and_idle_windows_load_when_first_read(tmp_path):
+    loaded = _run(
+        "import sys, cudaq_pulse as p\n"
+        "@p.kernel\n"
+        "def k(q):\n"
+        "    d = get_drive_line(q)\n"
+        "    drive(d, square(40, 0.1))\n"
+        "s = p.compile(k).lower(p.quantum_system('transmon_surface17').qudits[0])\n"
+        "names = ('cudaq_pulse._exposure', 'cudaq_pulse._idle_windows')\n"
+        "before = [m for m in names if m in sys.modules]\n"
+        "s.exposure\n"
+        "print(before, [m for m in names if m in sys.modules])",
+        tmp_path,
+    )
+    assert loaded == "[] ['cudaq_pulse._exposure', 'cudaq_pulse._idle_windows']"
+
+
 def test_viz_loads_matplotlib_only_when_it_plots(tmp_path):
     loaded = _run(
         "import sys, cudaq_pulse as p\n"

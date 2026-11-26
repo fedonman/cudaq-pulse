@@ -17,4 +17,4 @@ cudaq_pulse\.classical\.Bits
 # Type checkers see an lru_cache function's parameters as (*args, **kwargs).
 cudaq_pulse\._waits\._computed
 # QuantumSystem reads these from its description (QuantumSystem.__getattr__).
-cudaq_pulse(\._device)?\.QuantumSystem\.(physical_qudits|true_qudits|parameter_drift|parameter_drift_time|advance|couplings|residual_zz|model|attribution|anharmonicities|t1_times|t2_times|t2_echo_times|thermal_populations|coupling_map|connectivity_graph|drive_amplitude_scale)
+cudaq_pulse(\._device)?\.QuantumSystem\.(physical_qudits|true_qudits|parameter_drift|parameter_drift_time|advance|couplings|residual_zz|model|attribution|anharmonicities|t1_times|t2_times|t2_echo_times|thermal_populations|coupling_map|connectivity_graph|drive_amplitude_scale|frequency_frame)

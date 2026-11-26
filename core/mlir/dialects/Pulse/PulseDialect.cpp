@@ -15,6 +15,8 @@
 
 #define GET_OP_CLASSES
 #include "cudaq-pulse/Dialect/Pulse/PulseOps.h.inc"
+#define GET_OP_CLASSES
+#include "cudaq-pulse/Dialect/Pulse/PulseCallOp.h.inc"
 
 using namespace mlir;
 
@@ -37,6 +39,7 @@ void PulseDialect::initialize() {
 #define GET_OP_LIST
 #include "cudaq-pulse/Dialect/Pulse/PulseOps.cpp.inc"
       >();
+  addOperations<CallOp>();
 }
 
 } // namespace pulse

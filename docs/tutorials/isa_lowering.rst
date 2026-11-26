@@ -198,6 +198,15 @@ Both controllers count from the 250 MHz reference clock. A call to the
 decoder takes 4 ns to go out and 8 ns to come back, on top of its own
 latency. Every compile now checks a program against these two controllers.
 
+.. themed-figure:: figures/toy_qpu_wiring.svg
+   :alt: Diagram of the toy QPU. 3 qudits at 5, 5.3, 5.6 GHz and 2 toy.sequencer controllers: controller 0 drives qudits 0 and 1, and one feedline reads qudits 0 and 1; controller 1 drives qudit 2, and a readout line reads qudit 2. An outcome takes 40 cycles from one controller to the other. The decoder link of the control system, drawn to both controllers, takes 4 ns out and 8 ns back. The reference clock is 250 MHz and the program clock 1 GHz.
+   :width: 100%
+
+   The QPU as ``as_dict`` saves it. Each controller's drive lines are
+   solid and its readout lines dashed; the first controller reads its two
+   qudits on one feedline. The decoder's link belongs to the control
+   system.
+
 The program before lowering
 ---------------------------
 
@@ -278,6 +287,15 @@ What to notice:
 - The last drive sits inside an ``scf.if`` on the readout.
 - No phase shift is left. The compiler folded the virtual Z into the
   second drive.
+
+.. themed-figure:: figures/ramsey_reset_schedule.svg
+   :alt: Timeline of the scheduled program on qudit 0's drive and readout lines, with a lane for the outcome. An x90 pulse from 0 to 40 ns, a 100 ns wait, a second x90 pulse detuned by +2 MHz from 140 to 180 ns, then the readout from 180 to 380 ns. The outcome is ready 80 ns after the readout ends, and the x180 pulse, which plays only if the readout read 1, runs from 460 to 500 ns.
+   :width: 100%
+
+   The same schedule, drawn from the program's export. This QPU's clock
+   is 1 GHz, so a cycle is 1 ns. The dashed x180 pulse plays only when the
+   readout reads 1, and starts once the outcome is back, after the
+   controller's feedback latency.
 
 The export
 ~~~~~~~~~~
@@ -626,7 +644,7 @@ itself:
 .. code-block:: text
    :class: output
 
-   backend 'toy': 27 passed, 2 skipped
+   backend 'toy': 29 passed, 2 skipped
 
 The test programs cover:
 

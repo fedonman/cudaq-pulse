@@ -210,9 +210,11 @@ def validate(
     values known only at run time (one a frequency change made ahead of
     the pulse that takes it), compiled
     for *controller* (by default the backend's control system's), in each
-    format the backend reads. Two more are wired from that controller:
-    ``shared_line``, both qudits read out at once on one readout line, and
-    ``several_controllers``, on two controllers made from it, one of them
+    format the backend reads. Four more are wired from that controller:
+    ``shared_line``, both qudits read out at once on one readout line,
+    ``shared_drive_line_two_tones`` and ``shared_drive_line_one_tone``, both
+    driven at once on one drive line (the second on a system whose qudits
+    share a frequency), and ``several_controllers``, on two controllers made from it, one of them
     reading out both qudits on such a line, each controller's part in format
     ``/1`` (not compared with ``emulate``). Each must be emitted or refused with
     ``IncompatibleBackendError``; a program

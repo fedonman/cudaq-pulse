@@ -427,7 +427,9 @@ def test_every_problem_of_every_qudit_is_listed_at_its_path():
     qudits[2] = PhysicalQudit(2, math.nan, 50.0, math.inf, t2_echo_us=-1.0)
     assert _qudit_problems(qudits) == [
         "qudits[0].frequency_hz: -5000000000.0 is not a positive, finite number of Hz; "
-        "give the 0-1 frequency in Hz, more than 0",
+        "give the 0-1 frequency in Hz, more than 0; or, for a system that does not state it, "
+        "Offset(hz) from a reference its qudits share, or None (null in a file) for each "
+        "qudit's own carrier",
         "qudits[0].t1_us: -10.0 is not a finite number of microseconds, 0 or more; "
         "give T1 in microseconds, 0 or more (0 is no decay)",
         "qudits[0].t2_star_us: -3.0 is not a finite number of microseconds, 0 or more; "
@@ -435,7 +437,9 @@ def test_every_problem_of_every_qudit_is_listed_at_its_path():
         "qudits[0].thermal_population: 2.0 is not a finite number in [0, 1); "
         "give the excited-state population as a fraction, 0 or more and less than 1",
         "qudits[2].frequency_hz: nan is not a positive, finite number of Hz; "
-        "give the 0-1 frequency in Hz, more than 0",
+        "give the 0-1 frequency in Hz, more than 0; or, for a system that does not state it, "
+        "Offset(hz) from a reference its qudits share, or None (null in a file) for each "
+        "qudit's own carrier",
         "qudits[2].t2_star_us: inf is not a finite number of microseconds, 0 or more; "
         "give T2* in microseconds, 0 or more (0 is no decay)",
         "qudits[2].t2_echo_us: -1.0 is not a finite number of microseconds, 0 or more; "

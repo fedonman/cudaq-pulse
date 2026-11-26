@@ -38,7 +38,13 @@ its qudit's 0-1 frequency on a drive line, and its readout's
 starts that tone's frame at this frequency, and its ``phase_rad`` advances
 from it when the tone is retuned, so a backend that plays a line's other
 frequencies (another transition's tone, a shifted frequency) as offsets
-from one oscillator needs nothing from the quantum system. A kernel with
+from one oscillator needs nothing from the quantum system. On a system
+that does not state its frequencies they are offsets:
+``quantum_system.frequency_frame`` is ``"shared_reference"`` when every
+``frequency_hz`` and ``native_frequency_hz`` is an offset from one reference
+the qudits share, and ``"own_carrier"`` when each line's native frequency
+is 0 and its events' frequencies are offsets from its own qudit's carrier
+(see :doc:`quantum_systems`); the export's keys are the same. A kernel with
 qudit parameters gives it as the slot's symbols instead (``s0.f01``,
 ``s0.f_ro``; see below) and its lines leave it out. ``events`` lists every drive, readout,
 wait, sync, classical call and frame update in program order, once per loop
@@ -254,6 +260,35 @@ vocabulary of terms, whatever operations the compiler computes it with:
     A term over the expressions in ``of``, computed in the type ``t`` of
     its operands, ``"int"``, ``"float"`` or ``"bool"``. A ``const`` in a
     float term is that float, so ``{"const": 3}`` there is 3.0.
+``{"term": n}``
+    Term ``n`` of the expression's ``terms``, where that term is used.
+
+An expression that is a term may have ``"terms": [...]`` beside its
+``op``, ``type`` and ``of``: terms written once there and used by their
+place in the list, the first being term 0. A term is in ``terms`` when
+the expression uses it more than once, or when the expression would
+otherwise nest more than 65 terms deep; every other term is written where
+it is used. A term of ``terms`` uses only terms before it, so computing
+the list in order computes each term once. For ``t = x * 0.001`` (``x``
+result 0 of answer event 1), ``t = t + t`` and a phase shift of ``t + t``:
+
+.. code-block:: json
+
+   {"terms": [
+      {"op": "mul", "type": "float", "of": [{"answer": 1, "result": 0}, {"const": 0.001}]},
+      {"op": "add", "type": "float", "of": [{"term": 0}, {"term": 0}]}],
+    "op": "add", "type": "float", "of": [{"term": 1}, {"term": 1}]}
+
+``terms`` is only at the root of an expression and belongs to all of it;
+code that makes an expression an operand of a new term moves the list to
+the new root. The compiler writes no expression that nests more than 65
+terms deep, however many terms the program computes it with, which is the
+deepest it wrote one before there were ``terms``; the length of a wait on
+a controller with a clock of its own is up to three terms more (its
+bounds, and the conversion to the controller's cycles), as before. An
+expression has no ``terms`` unless it uses a term more than once or is
+deeper than that: an export that held no such expression is written as
+before.
 
 ``cudaq_pulse.controller.ExpressionTerm`` names every term. A value
 computed any other way is an ``UnsupportedError`` when the program is
@@ -416,6 +451,13 @@ Events on a shared line
     ``qudits`` (and ``tone_slot``) of their tone. On dedicated lines none of
     these keys are present, and a program that plays no shared line exports
     as it does on a system without them.
+Broadcast lines
+    A broadcast drive line (see `Broadcast lines`_) is listed once, with
+    ``"broadcast": true``, every qudit it reaches, and one
+    ``native_frequency_hz``, its tone's, in place of
+    ``native_frequencies_hz``. A play or frame update on it has, after its
+    ``line``, the line's ``qudits``, all of which it reaches, and no
+    ``tone_slot``; so do its ``runtime_tones`` and ``frame_state`` entries.
 Played events and frame updates
     ``tones``, a list of the tones the event plays (a frame update's
     frame), each with its ``frequency_hz``, its ``phase_rad`` in the loops'
@@ -610,8 +652,43 @@ Under ``rcp`` and ``alap_rcp``, ``max_concurrent_drives`` and
 follows another controller's on the same lane starts their start
 uncertainty after it, so the two never overlap. Given to a control system
 with controllers, they are checked under every schedule, counted the same
-way: a program that plays more at once fails to compile with a
-``ControllerLimitError`` naming the count and the first cycle.
+way. A program that ``asap`` places past them is placed as ``rcp`` places
+it, and one that ``alap`` places past them as ``alap_rcp`` does; its
+``options.schedule`` names the policy that placed it. A program that ``asap``
+or ``alap`` places within them keeps its schedule exactly. It fails to compile with a
+``ControllerLimitError`` naming the count and the first cycle when that
+placement does not keep to every limit either, or when the values a call
+binds place its pulses past one.
+
+A wait whose length is computed at run time (``wait(line, value,
+bounds=(low, high))``) is scheduled at its lowest length, and what follows
+it on its lines starts later in a run, by up to ``high - low`` cycles;
+lines the wait does not hold back keep their times. A blocking wait for an
+answer is such a wait without an upper end. These limits, and a
+shared line's ``max_concurrent_tones``, count pulses as they can slide: two
+pulses the schedule places apart are refused when some run plays them at
+once, with the first cycle they can and the waits that let them
+(``2 drives can play at once from cycle 600: what follows the wait on d0
+that ends at cycle 117 (up to 3984 cycles later) starts later in a run
+than it is placed``). Each wait's length is counted as independent of the
+others', also where two are computed from one answer, and every trip of a
+loop with such a wait as able to slide as far as its last. A wait without
+an upper bound lets what follows it play at any later time. To keep such
+pulses apart, ``sync`` their lines after the wait, so that they wait
+together, or give the wait bounds that keep them apart; ``rcp`` and
+``alap_rcp`` hold a line back at the wait when the drive or readout limit
+could bind. Pulses in the two arms of one branch are kept apart where
+they follow the same wait, and counted together where they follow
+different ones. A program without such a wait, and pulses on lines that
+all wait together, are counted as scheduled. A long loop with such a wait
+whose pulses can slide against another line's is counted from the trips
+the check walks and the rest of its trips together, whatever their
+number. Where that cannot be done (for example a pulse in the loop on a
+line its waits do not hold back, a loop in a loop, a long loop of counted
+pulses without such a wait in the same program, or line delays that put a
+pulse before one of an earlier wait) the program is counted trip by trip,
+up to the 1,048,576 copies of loops a check plays; past that the check
+stops with an ``UnsupportedError``.
 
 What the program computes at run time is converted by the same rule. A
 variable wait's ``length`` is clamped to its bounds, as the run clamps it
@@ -752,6 +829,109 @@ is ``{"qudits": [0, 1, 2, 3], "max_concurrent_tones": 4, "delay_ns": 12.0}``,
 without the keys at their defaults. ``examples/transmon/transmon_surface17_multiplexed_readout.py``
 reads out the four X-check ancillas of ``transmon_surface17`` on one
 feedline.
+
+Broadcast lines
+---------------
+
+A drive line may reach several qudits with one tone: a beam or an antenna
+that drives every qudit under it at once. ``DriveLine([0, 1, 2],
+broadcast=True)`` declares one. Where a shared line has a tone per qudit
+and a drive on it reaches one qudit, a broadcast line has one tone, and a
+drive on it reaches all its qudits; ``max_concurrent_tones`` does not apply
+to it, and a line is one or the other. ``broadcast`` and ``frequency_hz``
+are for a line given a list of qudits: ``DriveLine([0], broadcast=True)`` is
+an error, and on one qudit given as an int, ``DriveLine(0,
+broadcast=True)``, they are ignored.
+
+A kernel gets the line from any one of its qudits, or from all of them,
+which says in the kernel what the drive reaches; either way it is the one
+line::
+
+    from cudaq_pulse.controller import DriveLine
+
+    box = pulse.Controller(drive_lines=[DriveLine([0, 1, 2], broadcast=True)])
+
+    @pulse.kernel
+    def together(a, b, c):
+        beam = get_drive_line(a, b, c)      # get_drive_line(b) is the same line
+        drive(beam, gaussian(400 * pulse.ns, 0.5, 100 * pulse.ns))    # reaches a, b and c
+        shift_phase(beam.tone, 0.3)         # the line's one tone
+
+Several qudits must be all the qudits of one broadcast line, each once, in
+any order; other qudits are a ``CompilationError``, as are several qudits
+where the control system has no broadcast line and the first qudit's line
+is not yet taken. A kernel that holds only
+one of the line's qudits still drives all of them, and the compiled
+program's ``qudits`` lists them all. Pulses on the line follow each other,
+as on a dedicated line, and the line has one frame: a phase or frequency
+change of ``beam.tone`` applies to every later drive on it, for every
+qudit, so there is no virtual Z of one of its qudits alone. The line has no
+``tones`` of other transitions and no calibrations.
+
+The tone starts each shot at the frequency the line states,
+``DriveLine([0, 1, 2], broadcast=True, frequency_hz=5.1e9)``. It may be
+left out when the line's qudits share one frequency, which is then the
+tone's; when they differ, a program that takes the line is a
+``CompilationError`` asking for it. On a quantum system whose qudits give
+an ``Offset`` from one reference, the tone is the ``Offset`` its qudits
+share, and a line that states ``frequency_hz``, or whose qudits differ, is
+a ``CompilationError``: the line cannot state an offset yet. On a system
+whose qudits give no frequency, each tone is an offset from its own
+qudit's carrier, and the line's one tone is at the carrier of every qudit
+it reaches: a drive on it is resonant with each of them, and a change of
+the tone's frequency (``shift_frequency(beam.tone, 1e6)``) is that offset
+from each reached qudit's own carrier. The line cannot state
+``frequency_hz`` there (a ``CompilationError`` for a program that takes
+it), its ``native_frequency_hz`` in the exports is 0.0 as for every line of
+such a system, and each event's ``frequency_hz`` is the offset every qudit
+in its ``qudits`` sees. A drive on the line at another qudit's tone, or on
+another line at the line's tone, is refused as between any two qudits of
+such a system. Each qudit is driven off resonance by
+the difference between the tone and its own frequency: the simulator
+drives every qudit of the line with the same envelope, the tone's
+frequency and phase, and that qudit's own amplitude scale.
+
+The scheduler, the frame bookkeeping and the limits of a ``Controller``
+treat the line as a dedicated one: one pulse counts once toward
+``max_pulses``, and ``max_amplitude``, the grid, the pulse lengths and
+``max_frequencies_per_line`` apply to its one tone. A kernel with runtime
+qudits compiles for a control system with a broadcast line, and each call
+is checked when it binds its qudits: a runtime qudit that takes a drive
+line cannot be bound to a qudit of a broadcast line, since its line was
+compiled as that qudit's alone (pass such a qudit when the kernel is
+lowered). ``ReadoutLine`` has no ``broadcast``.
+
+Both formats of the export write the line once, with ``"broadcast":
+true``, all its ``qudits`` and the one ``native_frequency_hz`` of its
+tone, and one event for each drive, with the line's ``qudits`` and no
+``tone_slot``. In format ``/1`` the line's ``qudit``, and that of its
+events, is the lowest of them:
+
+.. code-block:: json
+
+    {"line": 0, "role": "drive", "qudit": 0, "qudits": [0, 1, 2], "broadcast": true,
+     "native_frequency_hz": 5100000000.0}
+
+In format ``/2`` the line has ``native_frequency_hz`` in place of
+``native_frequencies_hz``, and each play and frame update on it has
+``qudits`` after its ``line``:
+
+.. code-block:: json
+
+    {"kind": "play", "line": 0, "qudits": [0, 1, 2], "start_cycles": 0,
+     "duration_cycles": 400, "waveform": 0,
+     "tones": [{"frequency_hz": 5100000000.0, "phase_rad": 0.0}]}
+
+``frame_state`` and ``runtime_tones`` entries on the line have its
+``qudits`` too, and so does each of its drives in ``export_to_emulator()``,
+after its ``qudit``. A backend must drive every qudit in ``qudits``: one that
+reads only the line's first qudit would drive one. ``unroll`` does not take
+a program with a broadcast line yet; export it in format ``/1``. ``load``
+does not take a control system with one yet. The part of one controller of
+several lists the line's lowest qudit alone in its top-level ``qudits``. A program
+that takes no broadcast line exports as it does without one, and a control
+system without one loads nothing for them. In a system file the line is
+``{"qudits": [0, 1, 2], "broadcast": true, "frequency_hz": 5100000000.0}``.
 
 Waveform memory
 ---------------
@@ -1020,10 +1200,17 @@ branches on whether a call's answer came in time and on the answer itself
 same for a function declared with ``latency_mode="timeout"``, and one
 with values known only at run time, compiled for the controller (by
 default the backend's control system's) and exported in each format the
-backend reads. Two more are wired from that controller: ``shared_line``
+backend reads. Four more are wired from that controller: ``shared_line``
 reads out both qudits at once on one readout line reaching both
 (``ReadoutLine([0, 1],
-max_concurrent_tones=2)`` in place of its readout lines), and
+max_concurrent_tones=2)`` in place of its readout lines),
+``shared_drive_line_two_tones`` drives both qudits at once with the same
+envelope on one drive line reaching both (``DriveLine([0, 1],
+max_concurrent_tones=2)`` in place of its drive lines, its readout lines as
+they are) and reads both out; its two tones are at the qudits' two
+frequencies. ``shared_drive_line_one_tone`` is the same program on a system
+of the corpus's own whose two qudits share a frequency, so that a backend
+whose line plays one tone for all its qudits can emit it. And
 ``several_controllers`` runs on two controllers made from it, one driving
 qudit 0 and reading out both qudits on such a line, the other driving qudit
 1, with a shared reference clock; each controller's part is emitted on its
@@ -1051,7 +1238,7 @@ corpus is as written.
    # ...
    # PASS unsupported_event
    # PASS newer_format
-   # backend 'text': 10 passed, 8 refused
+   # backend 'text': 12 passed, 8 refused
    print(report.ok)  # True
 
 A backend that accepted the unknown event would instead report ``FAIL

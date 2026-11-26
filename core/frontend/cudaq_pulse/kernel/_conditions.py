@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any, NoReturn
 from ._bytecode_normalize import FOR_ITER, LOAD_CONST, POP_TOP
 from ._emitter import _REJOIN_MESSAGE, _Choice, _choice_map, _NotMeasurement, _watch_choices
 from .ir_builder import (
+    COMPARISONS,
     AnswerValue,
     CompilationError,
     IRValue,
@@ -24,8 +25,12 @@ from .ir_builder import (
     UndecidableComparison,
     arithmetic_text,
     contains_answer,
+    expression_leaves,
+    expression_nodes,
     is_symbolic,
     parameter_names,
+    shared_text,
+    written_together,
 )
 
 if TYPE_CHECKING:
@@ -67,8 +72,20 @@ def measured(value: Any) -> bool:
     if cls is _NotMeasurement:
         return measured(value.value)
     if cls is UndecidableComparison:
-        return measured(value.lhs) or measured(value.rhs)
+        # Kept on the comparison: one built from others asks only them, so a
+        # condition of n operations is asked n times, not n * n.
+        try:
+            return value.measured  # type: ignore[no-any-return]
+        except AttributeError:
+            pass
+        for node in expression_nodes(value, COMPARISONS, _unasked):
+            node.measured = measured(node.lhs) or measured(node.rhs)
+        return value.measured  # type: ignore[no-any-return]
     return False
+
+
+def _unasked(value: Any) -> bool:
+    return not hasattr(value, "measured")
 
 
 def is_condition(value: Any) -> bool:
@@ -233,7 +250,8 @@ def measurement_error(lhs: Any, symbol: str, rhs: Any) -> CompilationError:
     """The error for ``lhs symbol rhs``, which a measurement result takes part
     in: a test of it with a condition on answers needs nested ifs, and one
     with anything else is a test of the result itself."""
-    text = f"{_text(lhs)} {symbol} {_text(rhs)}"
+    (left, right), shared = written_together((lhs, rhs), _text)
+    text = f"{left} {symbol} {right}{shared}"
     if _answered(lhs) or _answered(rhs):
         return CompilationError(
             f"cannot trace ({text}): it tests a measurement result and a condition on "
@@ -299,24 +317,29 @@ _SYMBOLS = {
 }
 
 
-def _text(value: Any) -> str:
-    """*value* in an error, a measurement result as "measurement"."""
+def _text(value: Any, names: list[str] | None = None) -> str:
+    """*value* in an error, a measurement result as "measurement"; *names*
+    as ``shared_text`` takes them."""
     cls = value.__class__
     if cls is IRValue:
         return "measurement" if value.vtype == "measurement" else repr(value)
     if cls is _NotMeasurement:
-        return f"(not {_text(value.value)})"
+        return f"(not {_text(value.value, names)})"
     if cls is UndecidableComparison:
-        return f"({_text(value.lhs)} {value.op} {_text(value.rhs)})"
+        return shared_text(value, _comparison_text, _text, COMPARISONS, names)
     if cls is AnswerValue or is_symbolic(value):
-        return arithmetic_text(value)
+        return arithmetic_text(value, names)
     return repr(value)
+
+
+def _comparison_text(node: Any, lhs: str, rhs: str, plain: Any) -> str:
+    return f"({lhs} {node.op} {rhs})"
 
 
 def _answered(value: Any) -> bool:
     """Whether *value* holds a condition on answers."""
     if value.__class__ is UndecidableComparison:
-        return _answered(value.lhs) or _answered(value.rhs)
+        return any(_answered(leaf) for leaf in expression_leaves(value, COMPARISONS))
     if value.__class__ is _NotMeasurement:
         return answer_bit(value.value)
     return contains_answer(value)
@@ -344,9 +367,10 @@ def bit_logic(symbol: str, lhs: Any, rhs: Any) -> Any:
             return kept
         if measured(lhs) or measured(rhs):
             raise measurement_error(lhs, symbol, rhs)
+        (left, right), shared = written_together((lhs, rhs))
         raise CompilationError(
-            f"cannot trace {lhs!r} {symbol} {rhs!r}: it is known only when the program runs; "
-            f"`{symbol}` combines only conditions (comparisons and answer bits) and True or "
+            f"cannot trace {left} {symbol} {right}{shared}: it is known only when the program "
+            f"runs; `{symbol}` combines only conditions (comparisons and answer bits) and True or "
             "False; bitwise operations on numbers known only when the program runs are not "
             "supported",
             code="runtime_value",
@@ -559,10 +583,11 @@ def filtered(emitter: PulseIREmitter, containers: list[tuple[Any, Any]]) -> bool
     """Whether the arm just traced added to what a comprehension or
     generator expression builds."""
     yielded = emitter.locals.get(".yielded")
+    # A list put back from a slot log (no copy) keeps its length.
     return any(
         len(obj) != len(copy)
         for obj, copy in containers
-        if obj is yielded or any(obj is v for v in emitter.stack)
+        if copy is not None and (obj is yielded or any(obj is v for v in emitter.stack))
     )
 
 
@@ -588,14 +613,15 @@ def identity_error(left: Any, right: Any) -> CompilationError:
     arguments of one that depends on nothing else."""
     if measured(left) or measured(right):
         return measurement_error(left, "is", right)
+    (first, second), shared = written_together((left, right))
     message = (
-        f"cannot decide {left!r} is {right!r} at trace time: it is known only when the "
+        f"cannot decide {first} is {second}{shared} at trace time: it is known only when the "
         "program runs; compare values with == or !="
     )
 
     def run_time(value: Any) -> bool:
         if value.__class__ is UndecidableComparison:
-            return run_time(value.lhs) or run_time(value.rhs)
+            return any(run_time(leaf) for leaf in expression_leaves(value, COMPARISONS))
         return isinstance(value, (IRValue, _NotMeasurement)) or contains_answer(value)
 
     names = parameter_names(left) + parameter_names(right)

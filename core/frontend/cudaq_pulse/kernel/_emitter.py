@@ -159,12 +159,11 @@ class _EmptyCell:
 _EMPTY_CELL = _EmptyCell()
 
 
+# Return the values captured by a Python function, read now.
+#
+# Called on every trace, so rebinding a captured variable between calls
+# takes effect; the decoded bytecode is cached separately.
 def _extract_closures(fn: Any) -> dict[str, Any]:
-    """Return the values captured by a Python function, read now.
-
-    Called on every trace, so rebinding a captured variable between calls
-    takes effect; the decoded bytecode is cached separately.
-    """
     closures: dict[str, Any] = {}
     cells = getattr(fn, "__closure__", None)
     if cells and fn.__code__.co_freevars:
@@ -215,8 +214,8 @@ _SUBMIT = ClassicalFunction.submit
 _RESULT = Future.result
 
 
+# Whether *value* is a branch condition computed from an answer.
 def _is_answer_condition(value: Any) -> bool:
-    """Whether *value* is a branch condition computed from an answer."""
     return isinstance(value, (AnswerValue, UndecidableComparison)) and contains_answer(value)
 
 
@@ -245,8 +244,8 @@ def _trace_condition(*args: Any, **kwargs: Any) -> Any:
     return _trace_condition(*args, **kwargs)
 
 
+# Map each DSL function object, by identity, to its op name.
 def _load_pulse_functions() -> None:
-    """Map each DSL function object, by identity, to its op name."""
     from .. import ops
 
     loaded = {}
@@ -261,21 +260,20 @@ def _load_pulse_functions() -> None:
     _PULSE_FUNCTIONS.update(loaded)
 
 
+# Whether *fn* directly or transitively calls the pulse DSL.
+#
+# *owner* is the object a method is bound to: its instance, or its class
+# for a classmethod. The attributes the method reads are looked up on it,
+# and on the objects those hold, so a method that calls the DSL through
+# ``self.other()``, ``cls.other()`` or ``self.gates.other()`` counts too.
+# Those methods, and *fn* when *strict*, count a DSL name only where they
+# load it as a global: ``self.lock.wait()`` is not ``wait``.
 def _uses_pulse_ops(
     fn: types.FunctionType,
     seen: set[int] | None = None,
     owner: Any = None,
     strict: bool = False,
 ) -> bool:
-    """Whether *fn* directly or transitively calls the pulse DSL.
-
-    *owner* is the object a method is bound to: its instance, or its class
-    for a classmethod. The attributes the method reads are looked up on it,
-    and on the objects those hold, so a method that calls the DSL through
-    ``self.other()``, ``cls.other()`` or ``self.gates.other()`` counts too.
-    Those methods, and *fn* when *strict*, count a DSL name only where they
-    load it as a global: ``self.lock.wait()`` is not ``wait``.
-    """
     seen = seen or set()
     if id(fn) in seen:
         return False
@@ -316,8 +314,8 @@ def _uses_pulse_ops(
 _GLOBAL_NAMES = {}
 
 
+# The names *code* loads as globals, not those it reads as attributes.
 def _global_names(code: types.CodeType) -> frozenset[str]:
-    """The names *code* loads as globals, not those it reads as attributes."""
     hit = _GLOBAL_NAMES.get(id(code))
     if hit is not None and hit[0] is code:
         return hit[1]
@@ -346,18 +344,18 @@ _PLAIN_VALUES = (
 )
 
 
+# Whether *value* is a class or object whose methods may be pulse
+# helpers: anything but builtin values and modules.
 def _may_own_helpers(value: Any) -> bool:
-    """Whether *value* is a class or object whose methods may be pulse
-    helpers: anything but builtin values and modules."""
     if value is None or isinstance(value, _PLAIN_VALUES):
         return False
     cls = value if isinstance(value, type) else value.__class__
     return cls.__module__ != "builtins"
 
 
+# ``holder.name`` without running descriptors or ``__getattr__``: the
+# function a method, staticmethod, classmethod or property wraps.
 def _static_attr(holder: Any, name: str) -> Any:
-    """``holder.name`` without running descriptors or ``__getattr__``: the
-    function a method, staticmethod, classmethod or property wraps."""
     try:
         attr = inspect.getattr_static(holder, name)
     except AttributeError:
@@ -369,10 +367,10 @@ def _static_attr(holder: Any, name: str) -> Any:
     return attr
 
 
+# Whether a helper called with *args* must be traced: it is passed IR
+# values, or futures (whose ``result()`` only a traced call can take),
+# directly or in a list or tuple.
 def _takes_ir(args: Sequence[Any], kwargs: dict[str, Any] | None) -> bool:
-    """Whether a helper called with *args* must be traced: it is passed IR
-    values, or futures (whose ``result()`` only a traced call can take),
-    directly or in a list or tuple."""
 
     def traced(value: Any) -> bool:
         if isinstance(value, (IRValue, Future)):
@@ -422,8 +420,8 @@ class _NotMeasurement(_UndecidableComparisons):
         return f"(not {self.value!r})"
 
 
+# Whether *value* is a bool known only when the program runs.
 def _runtime_bit(value: Any) -> bool:
-    """Whether *value* is a bool known only when the program runs."""
     cls = value.__class__
     if cls is UndecidableComparison or cls is _NotMeasurement:
         return True
@@ -432,9 +430,9 @@ def _runtime_bit(value: Any) -> bool:
     return cls is AnswerValue and value.dtype == "i1"
 
 
+# Whether ``left is right`` depends on values known only when the
+# program runs: one is such a value, the other one too or a number.
 def _identity_unknown(left: Any, right: Any) -> bool:
-    """Whether ``left is right`` depends on values known only when the
-    program runs: one is such a value, the other one too or a number."""
     a = _runtime_bit(left) or is_symbolic(left)
     b = _runtime_bit(right) or is_symbolic(right)
     return (a or b) and (a or left.__class__ in _NUMBERS) and (b or right.__class__ in _NUMBERS)
@@ -600,8 +598,8 @@ def _choice_size(value: Any) -> int:
     return value.size if value.__class__ is _Choice else 1
 
 
+# The values *choice* may take.
 def _choice_leaves(choice: _Choice) -> Iterator[Any]:
-    """The values *choice* may take."""
     for value in (choice.then, choice.other):
         if value.__class__ is _Choice:
             yield from _choice_leaves(value)
@@ -609,11 +607,11 @@ def _choice_leaves(choice: _Choice) -> Iterator[Any]:
             yield value
 
 
+# Whether every choice the op *fname* is given can be one select: of
+# real or symbolic numbers, or of waveforms, and not one whose values the
+# builder checks against each other (the edges of a gaussian_square, the
+# bounds of a wait).
 def _selectable(fname: str, operands: tuple[Any, ...], attrs: dict[str, Any]) -> bool:
-    """Whether every choice the op *fname* is given can be one select: of
-    real or symbolic numbers, or of waveforms, and not one whose values the
-    builder checks against each other (the edges of a gaussian_square, the
-    bounds of a wait)."""
     if fname == "gaussian_square" and (
         _find_choice(attrs.get("duration")) is not None
         or _find_choice(attrs.get("width")) is not None
@@ -629,7 +627,9 @@ def _selects(value: Any) -> bool:
     if cls is _Choice:
         return all(_select_leaf(leaf) for leaf in _choice_leaves(value))
     if cls is ParameterExpression or cls is UndecidableComparison:
-        return _selects(value.lhs) and _selects(value.rhs)
+        from .ir_builder import expression_leaves
+
+        return all(_selects(leaf) for leaf in expression_leaves(value))
     if cls is list or cls is tuple:
         return _find_choice(value) is None
     return True
@@ -644,14 +644,19 @@ def _select_leaf(value: Any) -> bool:
     return cls is Parameter or cls is AnswerValue or isinstance(value, numbers.Real)
 
 
+# The first choice *value* holds, directly or in an expression, list or tuple.
 def _find_choice(value: Any) -> _Choice | None:
-    """The first choice *value* holds, directly or in an expression, list or tuple."""
     cls = value.__class__
     if cls is _Choice:
         return value  # type: ignore[no-any-return]
     if cls is ParameterExpression or cls is UndecidableComparison:
-        found = _find_choice(value.lhs)
-        return found if found is not None else _find_choice(value.rhs)
+        from .ir_builder import expression_leaves
+
+        for leaf in expression_leaves(value):
+            found = _find_choice(leaf)
+            if found is not None:
+                return found
+        return None
     if cls is list or cls is tuple:
         for item in value:
             found = _find_choice(item)
@@ -660,21 +665,23 @@ def _find_choice(value: Any) -> _Choice | None:
     return None
 
 
+# The choices *value* holds, not counting those inside other choices.
 def _choices_in(value: Any) -> Iterator[_Choice]:
-    """The choices *value* holds, not counting those inside other choices."""
     cls = value.__class__
     if cls is _Choice:
         yield value
     elif cls is ParameterExpression or cls is UndecidableComparison:
-        yield from _choices_in(value.lhs)
-        yield from _choices_in(value.rhs)
+        from .ir_builder import expression_leaves
+
+        for leaf in expression_leaves(value):
+            yield from _choices_in(leaf)
     elif cls is list or cls is tuple:
         for item in value:
             yield from _choices_in(item)
 
 
+# *value* where an if on *cond* takes its then arm (*taken*) or its else arm.
 def _in_arm(value: Any, cond: IRValue, taken: bool) -> Any:
-    """*value* where an if on *cond* takes its then arm (*taken*) or its else arm."""
     cls = value.__class__
     if cls is _Choice:
         if value.cond is cond:
@@ -684,18 +691,23 @@ def _in_arm(value: Any, cond: IRValue, taken: bool) -> Any:
         if then is value.then and other is value.other:
             return value
         return _choose(value.cond, then, other, value, value.scope)
-    if cls is ParameterExpression:
-        lhs = _in_arm(value.lhs, cond, taken)
-        rhs = _in_arm(value.rhs, cond, taken)
-        if lhs is value.lhs and rhs is value.rhs:
-            return value
-        return ParameterExpression(value.op, lhs, rhs, dtype=value.dtype)
-    if cls is UndecidableComparison:
-        lhs = _in_arm(value.lhs, cond, taken)
-        rhs = _in_arm(value.rhs, cond, taken)
-        if lhs is value.lhs and rhs is value.rhs:
-            return value
-        return _CHOICE_COMPARE[value.op](lhs, rhs)
+    if cls is ParameterExpression or cls is UndecidableComparison:
+        # Each operation once, after its operands; one whose operands stay
+        # as they are stays itself, so what it shares stays shared.
+        from .ir_builder import expression_nodes
+
+        made: dict[int, Any] = {}
+        for node in expression_nodes(value):
+            lhs, rhs = node.lhs, node.rhs
+            lhs = made[id(lhs)] if id(lhs) in made else _in_arm(lhs, cond, taken)
+            rhs = made[id(rhs)] if id(rhs) in made else _in_arm(rhs, cond, taken)
+            if lhs is node.lhs and rhs is node.rhs:
+                made[id(node)] = node
+            elif node.__class__ is ParameterExpression:
+                made[id(node)] = ParameterExpression(node.op, lhs, rhs, dtype=node.dtype)
+            else:
+                made[id(node)] = _CHOICE_COMPARE[node.op](lhs, rhs)
+        return made[id(value)]
     if cls is list or cls is tuple:
         items = [_in_arm(item, cond, taken) for item in value]
         if all(a is b for a, b in zip(items, value, strict=False)):
@@ -716,9 +728,9 @@ _CHOICE_COMPARE = {
 }
 
 
+# The choice on *cond* between *then* and *other*, named like *like*;
+# their value if they are the same.
 def _choose(cond: IRValue, then: Any, other: Any, like: _Choice, scope: tuple[int, ...]) -> Any:
-    """The choice on *cond* between *then* and *other*, named like *like*;
-    their value if they are the same."""
     if then is other:
         return then
     cls = then.__class__
@@ -733,9 +745,9 @@ def _choose(cond: IRValue, then: Any, other: Any, like: _Choice, scope: tuple[in
     return chosen
 
 
+# ``fn(*args)`` for the values the choices among *args* take: a choice
+# on the first one's condition, or ``fn(*args)`` if there are none.
 def _choice_map(fn: Callable[..., Any], *args: Any) -> Any:
-    """``fn(*args)`` for the values the choices among *args* take: a choice
-    on the first one's condition, or ``fn(*args)`` if there are none."""
     choices = [c for c in map(_find_choice, args) if c is not None]
     if not choices:
         return fn(*args)
@@ -755,9 +767,9 @@ def _map_choices(
     return _choose(cond, then, other, like, scope)
 
 
+# What an if on *choice* branches on: a bool when every value it may
+# take has the same truth, else the condition that chose it.
 def _choice_condition(choice: _Choice) -> Any:
-    """What an if on *choice* branches on: a bool when every value it may
-    take has the same truth, else the condition that chose it."""
 
     def truth(value: Any) -> bool:
         if isinstance(value, IRValue):
@@ -793,10 +805,10 @@ def _choice_condition(choice: _Choice) -> Any:
     )
 
 
+# Make *builder* raise ``_ChosenOperandError`` for an op given a choice,
+# before the op has any effect. Until a trace makes its first choice the
+# builder is left as it is, so other programs pay nothing for this.
 def _watch_choices(builder: Any) -> None:
-    """Make *builder* raise ``_ChosenOperandError`` for an op given a choice,
-    before the op has any effect. Until a trace makes its first choice the
-    builder is left as it is, so other programs pay nothing for this."""
     if getattr(builder, "_unwatched_emit", None) is not None:
         return
     emit = builder.emit
@@ -894,10 +906,10 @@ _TYPE_WORDS = {
 }
 
 
+# Record where tracing failed: ``pulse_source`` is the innermost
+# instruction, ``pulse_callers`` the calls that led to it, innermost
+# first.
 def _note_source(e: BaseException, prog: bc.DecodedCode, index: int) -> None:
-    """Record where tracing failed: ``pulse_source`` is the innermost
-    instruction, ``pulse_callers`` the calls that led to it, innermost
-    first."""
     try:
         source = getattr(e, "pulse_source", None)
         if source is None:
@@ -927,10 +939,10 @@ def tracing_frames() -> list[tuple[bc.DecodedCode, int]]:
     return frames
 
 
+# The loops being unrolled now, outermost first, as (loop, trip count
+# or None, iterations started, the frames ``pulse_source`` and
+# ``pulse_callers`` name for its ``for`` line).
 def _unrolled_loops() -> list[tuple[Any, int | None, int, list[tuple[bc.DecodedCode, int]]]]:
-    """The loops being unrolled now, outermost first, as (loop, trip count
-    or None, iterations started, the frames ``pulse_source`` and
-    ``pulse_callers`` name for its ``for`` line)."""
     code = PulseIREmitter._loop.__code__
     frames: list[tuple[bc.DecodedCode, int, Any]] = []
     frame: types.FrameType | None = sys._getframe(1)
@@ -972,8 +984,8 @@ def _unrolled_loops() -> list[tuple[Any, int | None, int, list[tuple[bc.DecodedC
     return found
 
 
+# Of ``_unrolled_loops()``, the loop with the most iterations.
 def _widest(loops: list[Any]) -> Any:
-    """Of ``_unrolled_loops()``, the loop with the most iterations."""
     return max(loops, key=lambda entry: entry[2] if entry[1] is None else entry[1])
 
 
@@ -1051,15 +1063,15 @@ def add_source_note(e: BaseException, heading: str | None = None) -> None:
         pass
 
 
+# The error for ``obj.attr`` when *obj* has no attribute *attr*.
 def _attribute_error(obj: Any, attr: str) -> CompilationError:
-    """The error for ``obj.attr`` when *obj* has no attribute *attr*."""
     from ._emit_errors import attribute_error
 
     return attribute_error(obj, attr)
 
 
+# How an operand error names what the kernel passed.
 def _describe(value: Any) -> str:
-    """How an operand error names what the kernel passed."""
     if value.__class__ is IRValue:
         word = _TYPE_WORDS.get(value.vtype, value.vtype)
         return f"an {word}" if word[0] in "aeiou" else f"a {word}"
@@ -1072,9 +1084,9 @@ def _describe(value: Any) -> str:
     return f"{type(value).__name__} {value!r}"
 
 
+# The current values of the lines passed to *fname*, with lists and
+# tuples of lines flattened.
 def _sync_lines(fname: str, call_args: list[Any]) -> list[IRValue]:
-    """The current values of the lines passed to *fname*, with lists and
-    tuples of lines flattened."""
     lines: list[IRValue] = []
     for v in call_args:
         if v.__class__ is not IRValue or v.vtype not in _LINE_TYPES:
@@ -1124,14 +1136,14 @@ def _sync_lines(fname: str, call_args: list[Any]) -> list[IRValue]:
     return lines
 
 
+# The samples of ``custom(duration, envelope)``: *envelope* called at the
+# middle of each clock cycle, ``t = k + 0.5`` for ``k`` in
+# ``range(duration)``, as ``wf_mul`` products are sampled; with *rate*
+# (n samples every d cycles, the lines' rate), at the middle of each
+# sample instead, ``t = (k + 0.5) * d / n``.
 def _sample_envelope(
     duration: Any, envelope: Any, rate: tuple[int, int] | None = None
 ) -> list[float]:
-    """The samples of ``custom(duration, envelope)``: *envelope* called at the
-    middle of each clock cycle, ``t = k + 0.5`` for ``k`` in
-    ``range(duration)``, as ``wf_mul`` products are sampled; with *rate*
-    (n samples every d cycles, the lines' rate), at the middle of each
-    sample instead, ``t = (k + 0.5) * d / n``."""
     scale = 1.0
     if isinstance(envelope, str):
         raise CompilationError(
@@ -1198,10 +1210,10 @@ def _sample_envelope(
     return samples
 
 
+# *value*, what a ``custom()`` envelope returned at *t* without
+# ``__float__``, as complex() reads it; a string, which complex() would
+# parse, is an error.
 def _envelope_number(value: Any, t: float) -> complex:
-    """*value*, what a ``custom()`` envelope returned at *t* without
-    ``__float__``, as complex() reads it; a string, which complex() would
-    parse, is an error."""
     if not isinstance(value, (str, bytes, bytearray)):
         try:
             return complex(value)
@@ -1213,9 +1225,9 @@ def _envelope_number(value: Any, t: float) -> complex:
     )
 
 
+# The error for unpacking *value*, which is not a tuple or list, into
+# *count* names.
 def _unpack_error(value: Any, count: int) -> str:
-    """The error for unpacking *value*, which is not a tuple or list, into
-    *count* names."""
     if value is None:
         return (
             f"cannot unpack None into {count} names: a call that returns nothing, such as "
@@ -1309,21 +1321,59 @@ class _Lines:
     """
 
     # ``watched``, set only while a measurement-conditioned arm is traced:
-    # for each arm around the trace, its record of changed containers and
-    # the containers it copies when they first change. ``plain``, set by the
+    # for each arm around the trace, innermost first, its record of changed
+    # containers, the containers it copies when they first change, its
+    # ``slotlog`` and the ids of the lists of lines and tones it puts back
+    # from that log (copied, as they were when the arm began, only if code
+    # changes them). ``plain``, set by the
     # first such if: id -> (list, length) for lists whose first `length`
     # entries hold no line or tone. Both are read with getattr. ``journal``,
     # set by the first such if, which makes these channels
     # ``_branch_journal.JournalLines``: while an if is traced, each channel
     # cell an op rebound since the if began, with its value then (results
     # written back by an if or a rolled loop are to cells already in it),
-    # else None.
-    __slots__ = ("held", "shared", "log", "watched", "plain", "journal")
+    # else None. ``slotlog``, set with ``journal``: while an if's arm is
+    # traced, each list slot written since the arm began, keyed by
+    # (id(list), index), with (list, index, the value it held then), else
+    # None; an if puts its arms' writes back from it instead of copying the
+    # lists of lines and tones the kernel holds. ``canon``: the ids of the
+    # lists the last if's then arm put back, in order, whose slot records it
+    # made canonical (None: none yet, or a call the trace does not follow
+    # may have moved their items); ``places``: by list id, [the list, the
+    # places each line or tone (by id) was recorded at in it, the list's
+    # length when last looked at]. ``between``: from the first such if on,
+    # the record of what code changes between ifs (``_branch_journal.
+    # _Between``), last among ``watched``; ``dirty``: whether the next if
+    # records every slot of the lists it puts back (code may have moved
+    # their items since the last one).
+    __slots__ = (
+        "held",
+        "shared",
+        "log",
+        "watched",
+        "plain",
+        "journal",
+        "slotlog",
+        "canon",
+        "places",
+        "between",
+        "dirty",
+        "unwatched",
+    )
 
     if TYPE_CHECKING:
-        watched: tuple[tuple[dict[int, tuple[Any, Any]], tuple[Any, ...]], ...]
+        # Each arm's (changed containers, containers copied when they first
+        # change, slot log, lists put back from it, their lengths); the
+        # record between ifs is (that record, (), None, True, None).
+        watched: tuple[tuple[Any, Any, Any, Any, Any], ...]
         plain: dict[int, tuple[list[Any], int]]
         journal: dict[_Chan, IRValue] | None
+        slotlog: dict[tuple[int, int], tuple[list[Any], int, IRValue]] | None
+        canon: tuple[int, ...] | None
+        places: dict[int, list[Any]]
+        between: Any
+        dirty: bool
+        unwatched: bool
 
     def __init__(self) -> None:
         self.held: dict[tuple[Any, ...], _Held] = {}
@@ -1336,6 +1386,11 @@ class _Lines:
     def add(self, key: tuple[Any, ...], values: tuple[IRValue, ...]) -> None:
         self.held[key] = _Held(values, key)
 
+    # Rebind *emitter*'s locals and list slots, and the channels, holding
+    # the linear values *fname* consumed.
+    #
+    # Each linear result (drive_line, tone, ...) replaces the first
+    # unclaimed operand of the same type, wherever the kernel holds it.
     def rebind_linear(
         self,
         emitter: PulseIREmitter,
@@ -1343,12 +1398,6 @@ class _Lines:
         call_args: list[StackVal],
         results: tuple[IRValue, ...],
     ) -> None:
-        """Rebind *emitter*'s locals and list slots, and the channels, holding
-        the linear values *fname* consumed.
-
-        Each linear result (drive_line, tone, ...) replaces the first
-        unclaimed operand of the same type, wherever the kernel holds it.
-        """
         slots = emitter._slots
         names: dict[int, str | None] | None = None
         if fname == "sync" and len(call_args) == 2 and call_args[0] is not call_args[1]:
@@ -1393,12 +1442,12 @@ class _Lines:
                 slots.pop(id(op_val), None)
                 slots[id(res)] = (slot[0], slot[1], res)
 
+    # *emitter*'s ``_rebind_one(old, new)``, then ``_rebind_one(old2,
+    # new2)``: a drive's line and tone. Unless a channel is shared, the
+    # names holding them are found in one pass over the locals.
     def rebind_pair(
         self, emitter: PulseIREmitter, old: IRValue, new: IRValue, old2: IRValue, new2: IRValue
     ) -> None:
-        """*emitter*'s ``_rebind_one(old, new)``, then ``_rebind_one(old2,
-        new2)``: a drive's line and tone. Unless a channel is shared, the
-        names holding them are found in one pass over the locals."""
         chan = old.chan
         chan2 = old2.chan
         if (chan is not None and chan.shared) or (chan2 is not None and chan2.shared):
@@ -1424,9 +1473,9 @@ class _Lines:
             cell.shared = True
         self.shared = True
 
+    # The channel value now standing for *value*, if it is a channel's.
     @staticmethod
     def current(value: IRValue) -> IRValue | None:
-        """The channel value now standing for *value*, if it is a channel's."""
         chan: _Chan | None = value.chan
         return None if chan is None else chan.value
 
@@ -1546,17 +1595,23 @@ def _is_pure_host_call(fn: Any) -> bool:
     return module.split(".")[0] == "numpy" and not module.startswith("numpy.random")
 
 
+# Names of the kernel parameters a symbolic value depends on.
 def _parameter_names(value: Any) -> list[str]:
-    """Names of the kernel parameters a symbolic value depends on."""
     if isinstance(value, Parameter):
         return [value.name]
     if isinstance(value, ParameterExpression):
-        return _parameter_names(value.lhs) + _parameter_names(value.rhs)
+        from .ir_builder import ARITHMETIC, expression_leaves
+
+        return [
+            leaf.name
+            for leaf in expression_leaves(value, ARITHMETIC)
+            if isinstance(leaf, Parameter)
+        ]
     return []
 
 
+# ``iter(value)`` for a ``for`` loop, with a kernel-specific error.
 def _iterate(value: Any) -> Any:
-    """``iter(value)`` for a ``for`` loop, with a kernel-specific error."""
     if isinstance(value, IRValue):
         message = (
             f"cannot iterate over a pulse {value.vtype} value; for loops "
@@ -1583,8 +1638,8 @@ def _iterate(value: Any) -> Any:
         ) from None
 
 
+# The current value of *value*'s channel, or *value* if it has none.
 def _current(value: IRValue) -> IRValue:
-    """The current value of *value*'s channel, or *value* if it has none."""
     chan = value.chan
     return value if chan is None else chan.value
 
@@ -1593,9 +1648,9 @@ _identity_keys = None
 _journal_lines = None
 
 
+# The channels of a trace from its first measurement-conditioned if on,
+# imported then.
 def _load_journal_lines() -> type[_Lines]:
-    """The channels of a trace from its first measurement-conditioned if on,
-    imported then."""
     global _journal_lines
     from ._branch_journal import JournalLines
 
@@ -1603,8 +1658,8 @@ def _load_journal_lines() -> type[_Lines]:
     return JournalLines
 
 
+# The native identity scan, imported on first use.
 def _load_identity_keys() -> Callable[[dict[str, Any], Any, Any], tuple[str | None, str | None]]:
-    """The native identity scan, imported on first use."""
     global _identity_keys
     from .._native._cudaq_pulse_native import identity_keys
 
@@ -1612,8 +1667,8 @@ def _load_identity_keys() -> Callable[[dict[str, Any], Any, Any], tuple[str | No
     return identity_keys
 
 
+# Whether the list slot recorded for *value* still holds it.
 def _slot_holds(slot: tuple[list[Any], int, IRValue], value: IRValue) -> bool:
-    """Whether the list slot recorded for *value* still holds it."""
     obj, index, held = slot
     if held is not value:
         return False
@@ -1623,8 +1678,8 @@ def _slot_holds(slot: tuple[list[Any], int, IRValue], value: IRValue) -> bool:
         return False
 
 
+# The positional arguments of ``f(*value)``, unpacked at trace time.
 def _star_args(value: Any) -> list[Any]:
-    """The positional arguments of ``f(*value)``, unpacked at trace time."""
     if value.__class__ is tuple or value.__class__ is list:
         return list(value)
     if isinstance(value, IRValue):
@@ -1635,8 +1690,8 @@ def _star_args(value: Any) -> list[Any]:
     return list(_iterate(value))
 
 
+# ``**other`` into the keyword arguments *target* of a call (or a dict display).
 def _merge_kwargs(target: dict[Any, Any], other: Any, strict: bool) -> None:
-    """``**other`` into the keyword arguments *target* of a call (or a dict display)."""
     try:
         keys = other.keys()
     except AttributeError:
@@ -1685,9 +1740,9 @@ class _UndefinedLocalError(CompilationError):
         self.message = message
 
 
+# What a measurement-conditioned if can choose *value* as: "number" or
+# "waveform"; None if it cannot.
 def _choice_kind(value: Any) -> str | None:
-    """What a measurement-conditioned if can choose *value* as: "number" or
-    "waveform"; None if it cannot."""
     cls = value.__class__
     if cls is _Choice:
         return "number" if value.vtype is None else "waveform"
@@ -1698,10 +1753,10 @@ def _choice_kind(value: Any) -> str | None:
     return "number" if isinstance(value, numbers.Real) else None
 
 
+# Whether the number or waveform *value* holds a value made inside a
+# measurement-conditioned if, which does not exist after it. *first* is
+# the first id made inside the if, *scope* the regions open around it.
 def _made_in_if(value: Any, first: int, scope: tuple[int, ...]) -> bool:
-    """Whether the number or waveform *value* holds a value made inside a
-    measurement-conditioned if, which does not exist after it. *first* is
-    the first id made inside the if, *scope* the regions open around it."""
     cls = value.__class__
     if cls is _Choice:
         return (
@@ -1714,7 +1769,9 @@ def _made_in_if(value: Any, first: int, scope: tuple[int, ...]) -> bool:
     if cls is AnswerValue:
         return bool(scope[: len(value.scope)] != value.scope)
     if cls is ParameterExpression:
-        return _made_in_if(value.lhs, first, scope) or _made_in_if(value.rhs, first, scope)
+        from .ir_builder import ARITHMETIC, expression_leaves
+
+        return any(_made_in_if(leaf, first, scope) for leaf in expression_leaves(value, ARITHMETIC))
     return False
 
 
@@ -1840,6 +1897,13 @@ class PulseIREmitter:
 
     # ── Interpreter loop ─────────────────────────────────────────────
 
+    # Run from *pc*. Jumps must stay inside ``(lo, hi)``.
+    #
+    # With ``header >= 0`` this traces one iteration of a rolled loop:
+    # it returns when control jumps back to the loop header and raises
+    # ``_NotRollableError`` if control leaves the body any other way.
+    # An exception raised here gets ``pulse_source = (prog, index)`` unless
+    # a nested trace already attached one.
     def _loop(
         self,
         prog: bc.DecodedCode,
@@ -1879,14 +1943,6 @@ class PulseIREmitter:
         _hashed: frozenset[type] = _HASHED,
         _iter_slots: int = ITER_SLOTS,
     ) -> Any:
-        """Run from *pc*. Jumps must stay inside ``(lo, hi)``.
-
-        With ``header >= 0`` this traces one iteration of a rolled loop:
-        it returns when control jumps back to the loop header and raises
-        ``_NotRollableError`` if control leaves the body any other way.
-        An exception raised here gets ``pulse_source = (prog, index)`` unless
-        a nested trace already attached one.
-        """
         instrs = prog.instrs
         stack = self.stack
         local_vars = self.locals
@@ -2401,16 +2457,15 @@ class PulseIREmitter:
 
     # ── Measurement-conditioned branches ─────────────────────────────
 
+    # Emit the ``if`` whose conditional jump is ``prog.instrs[index]``.
+    #
+    # Both arms are traced from the same state into an ``scf.if`` region.
+    # Pulse resources rebound by either arm become results of the region;
+    # any other value must end up the same in both arms. Returns the
+    # instruction index where tracing continues.
     def _runtime_branch(
         self, prog: bc.DecodedCode, index: int, cond: Any, jump_if_true: bool
     ) -> int:
-        """Emit the ``if`` whose conditional jump is ``prog.instrs[index]``.
-
-        Both arms are traced from the same state into an ``scf.if`` region.
-        Pulse resources rebound by either arm become results of the region;
-        any other value must end up the same in both arms. Returns the
-        instruction index where tracing continues.
-        """
         negated = isinstance(cond, _NotMeasurement)
         value = cond.value if negated else cond
         if value.vtype not in ("measurement", "i1"):
@@ -2435,20 +2490,27 @@ class PulseIREmitter:
         # slots the trace rebinds, is copied now, and its slots tracked again
         # after the first arm.
         containers: list[Any] = [v for v in saved_locals.values() if isinstance(v, _MUTABLE)]
-        lazy: list[tuple[Any, int]] = []
+        # A _branch_journal.Logged at an if holding lists of lines.
+        lazy: Any = []
         if containers:
             found = containers
             containers = []
-            rebound = set(map(id, map(_first, self._slots.values())))
             # id -> (list, n): the list's first n entries hold no line or
             # tone, looked at once each while they stay in it, unless a call
-            # the trace does not follow ran. A line or tone a traced change
-            # puts in a list has its slot tracked (rebound).
+            # the trace does not follow ran.
+            journal_lines: Any = self._lines
+            if getattr(journal_lines, "between", None) is not None:
+                journal_lines.take_plain()
             plain = getattr(self._lines, "plain", None)
             if plain is None:
                 plain = self._lines.plain = {}
             # What a generator yields is added to without a note.
             yielded: Any = saved_locals.get(".yielded")
+            # The lists of lines put back from the arms' slot logs, by id, in
+            # the order their first names come; and each further name of
+            # one, with the number of containers before it.
+            backed: dict[int, list[Any]] = {}
+            repeats: list[tuple[int, list[Any]]] | None = None
             for v in found:
                 if v is yielded:
                     containers.append((v, list(v)))
@@ -2456,23 +2518,47 @@ class PulseIREmitter:
                 if v.__class__ is dict or v.__class__ is not list and not isinstance(v, list):
                     lazy.append((v, len(v)))
                     continue
-                if id(v) not in rebound:
-                    seen = plain.get(id(v))
-                    i = 0 if seen is None or seen[0] is not v else seen[1]
-                    n = len(v)
-                    if i > n:
-                        i = 0
-                    while i < n:
-                        x = v[i]
-                        if x.__class__ is IRValue and x.vtype in LINEAR_TYPES:
-                            break
-                        i += 1
-                    else:
-                        plain[id(v)] = (v, n)
-                        lazy.append((v, n))
-                        continue
-                    plain.pop(id(v), None)
-                containers.append((v, list(v)))
+                ident = id(v)
+                seen = plain.get(ident)
+                i = 0 if seen is None or seen[0] is not v else seen[1]
+                n = len(v)
+                if i > n:
+                    i = 0
+                while i < n:
+                    x = v[i]
+                    if x.__class__ is IRValue and x.vtype in LINEAR_TYPES:
+                        break
+                    i += 1
+                else:
+                    plain[ident] = (v, n)
+                    lazy.append((v, n))
+                    continue
+                if seen is not None:
+                    del plain[ident]
+                # A list holding lines or tones is not copied: each arm puts
+                # back what it wrote into the list's slots from its slot log
+                # (copy None), and copies the list, as it was when the arm
+                # began, only if code changes it (_materialize). A subclass
+                # is copied as before: its own indexing runs as often as it did.
+                if v.__class__ is not list:
+                    containers.append((v, list(v)))
+                elif ident in backed:
+                    # Another name of a list already here: the if keeps one
+                    # record of it, however many names hold it, and puts it
+                    # back where its last name comes
+                    # (_branch_journal._put_back_order).
+                    if repeats is None:
+                        repeats = []
+                    repeats.append((len(containers), v))
+                else:
+                    backed[ident] = v
+                    containers.append((v, None))
+            if backed:
+                # Lists of lines put back from the arms' slot logs: the
+                # containers copied when first changed become a record of the
+                # if's slot logs (_branch_journal.Logged).
+                journal_class: Any = _journal_lines or _load_journal_lines()
+                lazy = journal_class.logged(self, containers, lazy, backed, repeats)
 
         # JournalLines from the first such if on (_branch_journal).
         lines: Any = self._lines
@@ -2531,7 +2617,39 @@ class PulseIREmitter:
             # The containers the then arm changed, put back (after the
             # channels: neither reads the other).
             if containers:
-                for obj, copy in containers:
+                undo: dict[int, list[tuple[int, IRValue]]] | None = None
+                # The containers in the order they are put back: theirs,
+                # unless names repeat a list of lines, which is put back
+                # where its last name comes (_branch_journal._put_back_order).
+                back = containers
+                started = lazy.__class__ is not list
+                if started:
+                    then_log = lazy.log
+                    then_made = lazy.made
+                    if lazy.repeats is not None:
+                        back = lines.put_back_order(containers, lazy.repeats)
+                # The lists put back, in order: their records are made
+                # canonical as each is put back, from the records written
+                # since the last if unless the lists differ from its own.
+                canon = tuple(id(obj) for obj, _ in back if isinstance(obj, list))
+                # Or every one if code may have moved the items of one since
+                # (_branch_journal.Logged.fresh).
+                full = started and (lazy.fresh or lines.dirty or lines.canon != canon)
+                for obj, copy in back:
+                    if copy is None:
+                        copy = then_made.get(id(obj))
+                        if copy is None:
+                            # Only the slots the then arm wrote, put back.
+                            if undo is None:
+                                # As the then arm's end grouped it, if it did.
+                                undo = lazy.by_list or lines.log_by_list(then_log)
+                            slots = self._slots
+                            for i, old in undo.get(id(obj), ()):
+                                slots.pop(id(obj[i]), None)
+                                obj[i] = old
+                                slots[id(old)] = (obj, i, old)
+                            lines.canonical_list(self, obj, full)
+                            continue
                     # lines.restore_container, inline for lists, dicts and sets.
                     if isinstance(obj, list):
                         obj[:] = copy
@@ -2551,6 +2669,19 @@ class PulseIREmitter:
                         obj.update(copy)
                     else:
                         lines.restore_container(self, obj, copy)
+                if started:
+                    lines.canon = canon
+                    lines.dirty = False
+                    logged: Any = self._slots
+                    logged.written.clear()
+                    # What the then arm wrote into list slots counts, for an
+                    # if around this one, as written by its arm, before the
+                    # else arm runs (a call it does not follow copies the
+                    # lists of that arm as they were when it began).
+                    around_log = lines.slotlog
+                    if around_log is not None:
+                        for key, noted in then_log.items():
+                            around_log.setdefault(key, noted)
                 if then_copies:
                     for obj, copy in then_copies:
                         lines.restore_container(self, obj, copy)
@@ -2559,10 +2690,21 @@ class PulseIREmitter:
                     # arms join (an if without else) changes nothing: each
                     # container holds the copy it was put back to just before.
                     else_locals, else_slots, else_copies = dict(self.locals), [], []
+                    else_log: Any = {}
+                    else_made: dict[int, list[Any]] = {}
                 else:
                     else_locals, else_slots, else_copies = self._trace_arm(
                         view, index, join, else_start, (containers, lazy)
                     )
+                    if started:
+                        else_log = lazy.log
+                        else_made = lazy.made
+                if started:
+                    # And what the else arm wrote.
+                    around_log = lines.slotlog
+                    if around_log is not None:
+                        for key, noted in else_log.items():
+                            around_log.setdefault(key, noted)
             else:
                 if then_copies:
                     for obj, copy in then_copies:
@@ -2659,7 +2801,10 @@ class PulseIREmitter:
             # that each arm yields a value once.
             listed: list[tuple[Any, int, IRValue, IRValue, IRValue | None]] = []
             if then_slots or else_slots:
-                originals = {id(obj): copy for obj, copy in containers}
+                originals = {id(obj): copy for obj, copy in containers if copy is not None}
+                if lazy.__class__ is not list:
+                    for made in (else_made, then_made):
+                        originals.update(made)
                 if lazy:
                     for obj, copy in then_copies + else_copies:
                         originals[id(obj)] = copy
@@ -2674,7 +2819,14 @@ class PulseIREmitter:
                     carrying = {(id(a), id(b)) for _, a, b in results}
                     carrying.update((id(a), id(b)) for _, _, a, b in slot_results)
                 for key, obj in keys.items():
-                    old = originals[key[0]][key[1]]
+                    copied: Any = originals.get(key[0])
+                    if copied is not None:
+                        old = copied[key[1]]
+                    else:
+                        # A list put back from the arms' slot logs: what the
+                        # slot held entering the if.
+                        entry: Any = then_log.get(key) or else_log.get(key)
+                        old = obj[key[1]] if entry is None else entry[2]
                     a = then_new.get(key, old)
                     b = else_new.get(key, old)
                     if a is b:
@@ -2747,10 +2899,15 @@ class PulseIREmitter:
             if listed:
                 for name, a, b in results:
                     carried.setdefault((id(a), id(b)), merged[name])
+                # The log of the arm around this if, if any.
+                around_log = getattr(lines, "slotlog", None)
             # A list slot that holds its channel's values takes the channel's result.
             for obj, i, a, b, out in listed:
                 out = carried.get((id(a), id(b)), out)
                 assert out is not None
+                if around_log is not None and obj.__class__ is list:
+                    at = i + len(obj) if i < 0 else i
+                    around_log.setdefault((id(obj), at), (obj, at, obj[i]))
                 obj[i] = out
                 self._slots[id(out)] = (obj, i, out)
             if chosen:
@@ -2787,6 +2944,11 @@ class PulseIREmitter:
             return len(prog.instrs) - 2
         return join
 
+    # Reject the values *a* and *b* the arms of the if on *cond* at
+    # ``prog.instrs[index]`` leave on *name* (on the stack, for ``""``:
+    # the value of a conditional expression, ``and`` or ``or``), unless
+    # the if can choose between them: two numbers or two waveforms that
+    # exist after it.
     def _check_choosable(
         self,
         name: str,
@@ -2797,11 +2959,6 @@ class PulseIREmitter:
         first: int,
         cond: IRValue,
     ) -> None:
-        """Reject the values *a* and *b* the arms of the if on *cond* at
-        ``prog.instrs[index]`` leave on *name* (on the stack, for ``""``:
-        the value of a conditional expression, ``and`` or ``or``), unless
-        the if can choose between them: two numbers or two waveforms that
-        exist after it."""
         line = prog.location(index)[1]
         measurement = cond.vtype == "measurement"
         on = "a measurement result" if measurement else "a runtime condition"
@@ -2846,8 +3003,8 @@ class PulseIREmitter:
             code="runtime_value",
         )
 
+    # The error for reading *name*, which is not bound.
     def _undefined(self, name: str) -> _UndefinedLocalError:
-        """The error for reading *name*, which is not bound."""
         one_arm = getattr(self, "_one_arm", None)
         where = one_arm.get(name) if one_arm else None
         if where is None:
@@ -2861,6 +3018,13 @@ class PulseIREmitter:
             "if when the other arm runs; assign it in both arms, or before the if",
         )
 
+    # Trace one arm until it reaches *join*; return its locals, rebound
+    # slots and the contents before it of the containers it changed. Of the
+    # *snapshot* of containers the arm starts with, those with a copy are
+    # copied, those without (lists of lines and tones) are put back from
+    # the arm's slot log (the containers copied when first changed are then
+    # a ``_branch_journal.Logged``, which keeps that log), and the others
+    # (each with its length) are copied when first changed.
     def _trace_arm(
         self,
         view: bc.DecodedCode,
@@ -2869,10 +3033,7 @@ class PulseIREmitter:
         start: int,
         snapshot: tuple[list[tuple[Any, Any]], list[tuple[Any, int]]],
     ) -> tuple[dict[str, StackVal], list[tuple[list[Any], int, IRValue]], list[tuple[Any, Any]]]:
-        """Trace one arm until it reaches *join*; return its locals, rebound
-        slots and the contents before it of the containers it changed. Of the
-        *snapshot* of containers the arm starts with, the first are copied and
-        the others (each with its length) are copied when first changed."""
+        lazy: Any  # a _branch_journal.Logged at an if holding lists of lines
         containers, lazy = snapshot
         end = len(view.instrs)
         returns = join >= end
@@ -2891,9 +3052,14 @@ class PulseIREmitter:
         mutated: dict[int, tuple[Any, Any]] = {}
         self._mutated = mutated
         if lazy:
-            lines = self._lines
+            lines: Any = self._lines
             around = getattr(lines, "watched", ())
-            lines.watched = ((mutated, tuple(obj for obj, _ in lazy)), *around)
+            if lazy.__class__ is list:
+                lines.watched = ((mutated, tuple(obj for obj, _ in lazy)), *around)
+            else:
+                # Lists of lines put back from the arm's slot log
+                # (_branch_journal.Logged).
+                lazy.begin(lines, mutated, around)
         try:
             outcome = self._loop(view, start, branch, end, header)
         except _NotRollableError:
@@ -2904,6 +3070,8 @@ class PulseIREmitter:
             self._mutated = outer
             if lazy:
                 lines.watched = around
+                if lazy.__class__ is not list:
+                    lines.slotlog = lazy.around_log
             if outer is not None:
                 for key, entry in mutated.items():
                     outer.setdefault(key, entry)
@@ -2930,7 +3098,10 @@ class PulseIREmitter:
                 elif len(obj) != length:
                     break
             else:
-                slots = _slot_changes(containers + copies)
+                if lazy.__class__ is list:
+                    slots = _slot_changes(containers + copies)
+                else:
+                    slots = lazy.end(mutated, containers, copies)
         elif containers:
             slots = _slot_changes(containers)
         else:
@@ -2968,9 +3139,9 @@ class PulseIREmitter:
             )
         return dict(self.locals), slots, copies
 
+    # Return the jump target, or -1 when a rolled iteration completes.
     @staticmethod
     def _jump(target: int, lo: int, hi: int, header: int) -> int:
-        """Return the jump target, or -1 when a rolled iteration completes."""
         if target == header:
             return -1
         if not lo < target < hi:
@@ -2979,6 +3150,14 @@ class PulseIREmitter:
 
     # ── Structured loops ─────────────────────────────────────────────
 
+    # Emit *loop* as one ``scf.for``; return False to unroll it instead.
+    #
+    # The body is traced once. Rolling is kept only if that iteration
+    # returned to the loop header and left every Python-level value
+    # (non-IR locals and the lists and dicts they hold, and any container
+    # a called kernel or helper reaches) unchanged, so all iterations would
+    # trace identically. Otherwise the emitted ops are rolled back.
+    # The names in *unbound* are left unbound while the body is traced.
     def _roll(
         self,
         loop: _Loop,
@@ -2988,15 +3167,6 @@ class PulseIREmitter:
         hoisted: bool = False,
         unbound: dict[str, StackVal] | None = None,
     ) -> bool:
-        """Emit *loop* as one ``scf.for``; return False to unroll it instead.
-
-        The body is traced once. Rolling is kept only if that iteration
-        returned to the loop header and left every Python-level value
-        (non-IR locals and the lists and dicts they hold, and any container
-        a called kernel or helper reaches) unchanged, so all iterations would
-        trace identically. Otherwise the emitted ops are rolled back.
-        The names in *unbound* are left unbound while the body is traced.
-        """
         rng = loop.rng
         stack = self.stack
         saved_stack = list(stack)
@@ -3241,16 +3411,16 @@ class PulseIREmitter:
             self.locals.pop(var, None)
         return True
 
+    # The value entering a rolled loop of a name the body first binds to *value*.
     @staticmethod
     def _entering(value: IRValue, before_of: dict[int, IRValue]) -> IRValue:
-        """The value entering a rolled loop of a name the body first binds to *value*."""
         chan = value.chan
         before = None if chan is None else before_of.get(id(chan))
         return IRValue(UNDEFINED_VID, value.vtype) if before is None else before
 
+    # Whether *loop* is small enough to unroll: its trip count times the
+    # calls in its body (at least one) is at most the unroll threshold.
     def _unrolls(self, loop: _Loop, prog: bc.DecodedCode, for_idx: int, exit_idx: int) -> bool:
-        """Whether *loop* is small enough to unroll: its trip count times the
-        calls in its body (at least one) is at most the unroll threshold."""
         threshold = self._unroll
         try:
             count = len(loop.rng)
@@ -3268,28 +3438,33 @@ class PulseIREmitter:
                 calls += 1
         return count * max(calls, 1) <= threshold
 
+    # Remember what *obj* held before a rolled body or branch arm changed it.
     def _note_mutation(self, obj: Any) -> None:
-        """Remember what *obj* held before a rolled body or branch arm changed it."""
         mutated = self._mutated
         if mutated is not None and id(obj) not in mutated:
+            lines: Any = self._lines
+            arms = getattr(lines, "watched", None)
+            if arms and isinstance(obj, list):
+                lines.materialize(arms, obj)
+                if id(obj) in mutated:
+                    return
             if obj.__class__ in _CONTAINERS:
                 mutated[id(obj)] = (obj, obj.copy())
             elif isinstance(obj, _MUTABLE):
                 mutated[id(obj)] = (obj, _contents(obj))
 
+    # Mark a container built by the body or arm being traced as free to change.
     def _note_fresh(self, obj: Any) -> None:
-        """Mark a container built by the body or arm being traced as free to change."""
         if self._mutated is not None:
             self._mutated.setdefault(id(obj), (obj, None))
 
+    # The carried *names* and (slot index, label) entries, in their order.
+    #
+    # A line's own tone follows the name the line is carried by, as
+    # ``name.tone``; the other slots come last.
     def _carry_order(
         self, names: list[str], values: dict[str, Any], slots: list[tuple[Any, ...]]
     ) -> list[Any]:
-        """The carried *names* and (slot index, label) entries, in their order.
-
-        A line's own tone follows the name the line is carried by, as
-        ``name.tone``; the other slots come last.
-        """
         by_value = {id(v): n for n, v in values.items()}
         keyed: list[tuple[str, Any]] = [(n, n) for n in names]
         rest: list[Any] = []
@@ -3318,15 +3493,15 @@ class PulseIREmitter:
         name = next((n for n, v in self.locals.items() if v is obj), "")
         return f"{name}[{index}]"
 
+    # The locals *before* a traced loop iteration that it rebound to
+    # other Python values or IR values of another type (an inner loop's
+    # variable, say), or ``None`` when it deleted one. The loop variable
+    # *var* is exempt: the header binds it and the body never reads it, so
+    # what it held before the loop (an earlier loop's last value) is not
+    # state the iterations depend on; nor is a rebound name if the body
+    # binds it before reading it, which tracing the body again with it
+    # unbound tells.
     def _rebound(self, before: dict[str, StackVal], var: str) -> list[str] | None:
-        """The locals *before* a traced loop iteration that it rebound to
-        other Python values or IR values of another type (an inner loop's
-        variable, say), or ``None`` when it deleted one. The loop variable
-        *var* is exempt: the header binds it and the body never reads it, so
-        what it held before the loop (an earlier loop's last value) is not
-        state the iterations depend on; nor is a rebound name if the body
-        binds it before reading it, which tracing the body again with it
-        unbound tells."""
         after = self.locals
         rebound = []
         for name, old in before.items():
@@ -3348,8 +3523,8 @@ class PulseIREmitter:
 
     # ── Global / closure resolution ──────────────────────────────────
 
+    # Resolve a global name to its Python value.
     def _resolve_global(self, name: str) -> Any:
-        """Resolve a global name to its Python value."""
         if name in self._fn_globals:
             return self._fn_globals[name]
         if name in self._fn_closures:
@@ -3364,8 +3539,8 @@ class PulseIREmitter:
             return self._builtins[name]
         return (_UNRESOLVED, name)
 
+    # The error for calling *name*, which nothing in scope defines.
     def _unknown_name(self, name: str) -> CompilationError:
-        """The error for calling *name*, which nothing in scope defines."""
         known = [*OP_TABLE, *self.locals, *self._fn_globals, *self._fn_closures, *self._builtins]
         from ._emit_errors import unknown
 
@@ -3373,13 +3548,13 @@ class PulseIREmitter:
 
     # ── Call dispatch ────────────────────────────────────────────────
 
+    # Route a call to pulse IR emission or Python evaluation.
     def _dispatch_call(
         self,
         callable_val: Any,
         call_args: list[StackVal],
         kwargs: dict[str, StackVal] | None,
     ) -> None:
-        """Route a call to pulse IR emission or Python evaluation."""
 
         # Unresolved sentinel (fallback from _resolve_global)
         if isinstance(callable_val, tuple) and len(callable_val) == 2:
@@ -3573,11 +3748,13 @@ class PulseIREmitter:
                     # A call the trace does not follow may change any
                     # container an arm around it copies only when it first
                     # changes, and the lists known to hold no line or tone.
-                    lines = self._lines
-                    for mutated, watched in getattr(lines, "watched", ()):
+                    lines: Any = self._lines
+                    for mutated, watched, *arm in getattr(lines, "watched", ()):
                         for obj in watched:
                             if id(obj) not in mutated:
                                 mutated[id(obj)] = (obj, obj.copy())
+                        if arm:
+                            lines.untraced(self, mutated, arm[1], callable_val, call_args, kwargs)
                     plain = getattr(lines, "plain", None)
                     if plain:
                         plain.clear()
@@ -3629,6 +3806,9 @@ class PulseIREmitter:
             code="unsupported_construct",
         )
 
+    # Call *fn* with arguments holding a choice: inline a Python helper,
+    # or apply a pure function to each value the choice may take. False
+    # for any other callable, which is called with the choice itself.
     def _call_on_choice(
         self,
         fn: Any,
@@ -3636,9 +3816,6 @@ class PulseIREmitter:
         call_args: list[StackVal],
         kwargs: dict[str, StackVal] | None,
     ) -> bool:
-        """Call *fn* with arguments holding a choice: inline a Python helper,
-        or apply a pure function to each value the choice may take. False
-        for any other callable, which is called with the choice itself."""
         if fn.__class__ is types.FunctionType:
             self._inline_helper(fn, call_args, kwargs)
             return True
@@ -3672,8 +3849,8 @@ class PulseIREmitter:
         self.stack.append(result)
         return True
 
+    # Reject *choice* outside the regions where its if is.
     def _check_choice(self, choice: _Choice) -> None:
-        """Reject *choice* outside the regions where its if is."""
         if choice.vtype == "condition":
             from ._conditions import note_builder
 
@@ -3685,6 +3862,14 @@ class PulseIREmitter:
                 code="runtime_value",
             )
 
+    # Emit the op *fname* given a choice, once: each number or waveform
+    # it chooses is one select on the choice's condition, which every op
+    # given that choice reads. Lowering keeps a select where the target
+    # takes the value at run time, and otherwise emits each op that reads
+    # it in both arms of an if on the condition. Choices a select cannot
+    # hold (inside a list, of complex numbers, or that a check needs the
+    # value of) are emitted per arm instead. A *nested* choice, one an arm
+    # of another gives, was checked with it.
     def _emit_chosen(
         self,
         fname: str,
@@ -3694,14 +3879,6 @@ class PulseIREmitter:
         attrs: dict[str, Any],
         nested: bool = False,
     ) -> tuple[Any, ...]:
-        """Emit the op *fname* given a choice, once: each number or waveform
-        it chooses is one select on the choice's condition, which every op
-        given that choice reads. Lowering keeps a select where the target
-        takes the value at run time, and otherwise emits each op that reads
-        it in both arms of an if on the condition. Choices a select cannot
-        hold (inside a list, of complex numbers, or that a check needs the
-        value of) are emitted per arm instead. A *nested* choice, one an arm
-        of another gives, was checked with it."""
         given = [*operands, *attrs.values()]
         if not nested:
             for root in _choices_in(given):
@@ -3737,9 +3914,9 @@ class PulseIREmitter:
                 track_samples(self, fname, None, operands, out_types, attrs, results[0].vid)
         return results
 
+    # The select of the waveforms *choice* holds, with their duration if
+    # they all have the same one.
     def _select_waveform(self, choice: _Choice) -> IRValue:
-        """The select of the waveforms *choice* holds, with their duration if
-        they all have the same one."""
         value = IRValue(self.b.select(choice, "waveform"), "waveform")
         known = self._durations
         durations = {known.get(leaf.vid) for leaf in _choice_leaves(choice)}
@@ -3754,6 +3931,10 @@ class PulseIREmitter:
             track_samples(self, "select", None, tuple(_choice_leaves(choice)), (), {}, value.vid)
         return value
 
+    # Emit the op *fname* given a choice no select holds: a waveform op
+    # once for each value the choice may take, making a choice of
+    # waveforms; any other op in each arm of an if on the choice's
+    # condition, as if the kernel had written it in both arms.
     def _emit_per_arm(
         self,
         fname: str,
@@ -3762,10 +3943,6 @@ class PulseIREmitter:
         out_types: tuple[str, ...],
         attrs: dict[str, Any],
     ) -> tuple[Any, ...]:
-        """Emit the op *fname* given a choice no select holds: a waveform op
-        once for each value the choice may take, making a choice of
-        waveforms; any other op in each arm of an if on the choice's
-        condition, as if the kernel had written it in both arms."""
         choice = _find_choice([*operands, *attrs.values()])
         assert choice is not None
         cond = choice.cond
@@ -3790,6 +3967,7 @@ class PulseIREmitter:
         types_ = tuple(v.vtype for v in then)
         return b.emit("scf.if_end", (), types_, {"result_names": list(types_)})  # type: ignore[no-any-return]
 
+    # Emit the op *fname* with the values an arm of a choice gives it.
     def _emit_resolved(
         self,
         fname: str,
@@ -3798,7 +3976,6 @@ class PulseIREmitter:
         attrs: dict[str, Any],
         out_types: tuple[str, ...],
     ) -> tuple[Any, ...]:
-        """Emit the op *fname* with the values an arm of a choice gives it."""
         if getattr(self, "_sampled", None) is not None and fname in ("drive", "readout"):
             from ._durations import for_line
 
@@ -3820,10 +3997,10 @@ class PulseIREmitter:
                 track_samples(self, fname, op_name, operands, out_types, attrs, results[0].vid)
         return results
 
+    # Run a generator expression to the end, and push an iterator over
+    # what it yields: it is consumed where it is made, so it is evaluated
+    # there, with its pulse ops in order.
     def _run_genexpr(self, code: types.CodeType, call_args: list[StackVal]) -> None:
-        """Run a generator expression to the end, and push an iterator over
-        what it yields: it is consumed where it is made, so it is evaluated
-        there, with its pulse ops in order."""
         closures = {}
         for name in code.co_freevars:
             value = self.locals.get(name, _MISSING)
@@ -3855,13 +4032,13 @@ class PulseIREmitter:
         except ValueError as exc:
             raise CompilationError(str(exc), code="wrong_argument") from exc
 
+    # Emit a pulse-aware Python helper into the current IR builder.
     def _inline_helper(
         self,
         fn: types.FunctionType,
         call_args: list[StackVal],
         kwargs: dict[str, StackVal] | None,
     ) -> None:
-        """Emit a pulse-aware Python helper into the current IR builder."""
         code = fn.__code__
         if self._depth >= MAX_INLINE_DEPTH:
             raise CompilationError(
@@ -3965,9 +4142,9 @@ class PulseIREmitter:
         else:
             self.stack.append(None)
 
+    # ``value.name`` for an IR value: a line's ``tones``; ``line.tone``
+    # the loop reads in place.
     def _value_attribute(self, value: IRValue, name: str) -> Any:
-        """``value.name`` for an IR value: a line's ``tones``; ``line.tone``
-        the loop reads in place."""
         chan = value.chan
         if value.vtype in _LINE_TYPES and chan is not None:
             if name == "tones":
@@ -4052,6 +4229,10 @@ class PulseIREmitter:
                 else:
                     last = _OPTIONAL_LAST.get(fname)
                     if last is None or len(call_args) != value_count + len(attr_names) + 1:
+                        if fname == "get_drive_line" and len(call_args) > 1:
+                            from ._emit_errors import no_broadcast_line
+
+                            raise no_broadcast_line(len(call_args))
                         raise CompilationError(
                             f"{fname}: expected {value_count + len(attr_names)} args, "
                             f"got {len(call_args)}",
@@ -4163,8 +4344,8 @@ class PulseIREmitter:
 
         return custom_samples(self.b, duration, attrs)
 
+    # Bring names holding an old value of a shared channel up to date.
     def _refresh_lines(self) -> None:
-        """Bring names holding an old value of a shared channel up to date."""
         lines = self._lines
         local_vars = self.locals
         for name, value in local_vars.items():
@@ -4173,12 +4354,12 @@ class PulseIREmitter:
                 if current is not None and current is not value:
                     local_vars[name] = current
 
+    # The duration of the waveform arithmetic or ``custom_samples`` call
+    # *fname* makes, if known; rejects arithmetic on waveforms of different
+    # durations.
     def _waveform_duration(
         self, fname: str, operands: tuple[IRValue, ...], attrs: dict[str, Any]
     ) -> int | None:
-        """The duration of the waveform arithmetic or ``custom_samples`` call
-        *fname* makes, if known; rejects arithmetic on waveforms of different
-        durations."""
         if fname in _WAVEFORM_ARITHMETIC:
             known = self._durations
             left = known.get(operands[0].vid)
@@ -4203,12 +4384,11 @@ class PulseIREmitter:
                 return None
         return None
 
+    # Undo a traced arm or loop body's changes to a container.
+    #
+    # Restored lists hold values whose slots the undone code consumed, so
+    # their slots are tracked again.
     def _restore_container(self, obj: Any, copy: Any) -> None:
-        """Undo a traced arm or loop body's changes to a container.
-
-        Restored lists hold values whose slots the undone code consumed, so
-        their slots are tracked again.
-        """
         if isinstance(obj, _Held):
             for i, value in enumerate(copy):
                 obj[i] = value
@@ -4222,17 +4402,17 @@ class PulseIREmitter:
             obj.clear()
             obj.extend(copy)
 
+    # Remember the list slots from *start* on that hold lines or tones.
     def _track_slots(self, items: list[Any], start: int) -> None:
-        """Remember the list slots from *start* on that hold lines or tones."""
         slots = self._slots
         for i in range(start, len(items)):
             v = items[i]
             if v.__class__ is IRValue and v.vtype in LINEAR_TYPES:
                 slots[id(v)] = (items, i, v)
 
+    # Rebind *old* to *new*, of its type; ``_emit_pulse_call`` checked
+    # *old* and made it its channel's current value.
     def _rebind_one(self, old: IRValue, new: IRValue) -> None:
-        """Rebind *old* to *new*, of its type; ``_emit_pulse_call`` checked
-        *old* and made it its channel's current value."""
         chan = old.chan
         if chan is not None:
             chan.value = new
@@ -4248,12 +4428,12 @@ class PulseIREmitter:
             self.locals[name] = new
         self._rebind_slot(old, new)
 
+    # ``_find_local_name`` of two distinct values, in one pass.
     def _local_names(self, val: IRValue, val2: IRValue) -> tuple[str | None, str | None]:
-        """``_find_local_name`` of two distinct values, in one pass."""
         return (_identity_keys or _load_identity_keys())(self.locals, val, val2)
 
+    # Put *new* in the list slot *old* was read from, if it still holds it.
     def _rebind_slot(self, old: IRValue, new: IRValue) -> None:
-        """Put *new* in the list slot *old* was read from, if it still holds it."""
         slots = self._slots
         slot = slots.get(id(old))
         if slot is not None and slot[2] is old:
@@ -4269,8 +4449,8 @@ class PulseIREmitter:
             del slots[id(old)]
             slots[id(new)] = (slot[0], slot[1], new)
 
+    # Find the local variable name bound to a given IRValue.
     def _find_local_name(self, val: IRValue) -> str | None:
-        """Find the local variable name bound to a given IRValue."""
         for name, v in self.locals.items():
             if v is val:
                 return name
@@ -4289,10 +4469,10 @@ class PulseIREmitter:
         }
 
 
+# List slots whose linear value was replaced, or None for any other change.
 def _slot_changes(
     containers: list[tuple[Any, Any]],
 ) -> list[tuple[Any, int, IRValue]] | None:
-    """List slots whose linear value was replaced, or None for any other change."""
     changes: list[tuple[Any, int, IRValue]] = []
     for obj, copy in containers:
         if len(obj) != len(copy):
@@ -4320,9 +4500,9 @@ def _slot_changes(
     return changes
 
 
+# ``_slot_changes`` of a list subclass, read as it iterates, once: False
+# for any change but a linear value replaced.
 def _subclass_slot_changes(obj: list[Any], copy: list[Any], changes: list[Any]) -> bool:
-    """``_slot_changes`` of a list subclass, read as it iterates, once: False
-    for any change but a linear value replaced."""
     for i, (new, old) in enumerate(zip(obj, copy, strict=False)):
         if new is old:
             continue
@@ -4337,20 +4517,19 @@ def _subclass_slot_changes(obj: list[Any], copy: list[Any], changes: list[Any]) 
     return True
 
 
+# The names a rolled loop body left on an old value of a channel, and
+# the names it moved from one channel to another.
+#
+# A name on an old value was read from a tuple or dict the tracer does
+# not rebind; each use of it reads its channel's current value. It is not
+# carried when it entered on the same channel or the body bound it first,
+# so every iteration traces alike; after the loop it names the channel's
+# value, given as (name, channel). A name that entered on another channel
+# is returned apart: the loop rolls only if the body does not read it
+# before rebinding it.
 def _stale_names(
     delta: dict[str, IRValue], before: dict[str, StackVal], count: int
 ) -> tuple[list[tuple[str, _Chan]], list[str]]:
-    """The names a rolled loop body left on an old value of a channel, and
-    the names it moved from one channel to another.
-
-    A name on an old value was read from a tuple or dict the tracer does
-    not rebind; each use of it reads its channel's current value. It is not
-    carried when it entered on the same channel or the body bound it first,
-    so every iteration traces alike; after the loop it names the channel's
-    value, given as (name, channel). A name that entered on another channel
-    is returned apart: the loop rolls only if the body does not read it
-    before rebinding it.
-    """
     stale: list[tuple[str, _Chan]] = []
     crossing: list[str] = []
     for n, v in delta.items():
@@ -4369,17 +4548,16 @@ def _stale_names(
     return stale, crossing
 
 
+# The names a rolled loop body left on a qudit, and the names it moved
+# from one qudit to another.
+#
+# A qudit is allocated before any loop and is not carried: every
+# iteration leaves the same qudit on a name, which names it after the
+# loop. A name that entered on another qudit is returned apart: the loop
+# rolls only if the body does not read it before rebinding it.
 def _qudit_names(
     delta: dict[str, IRValue], before: dict[str, StackVal], count: int
 ) -> tuple[list[str], list[str]]:
-    """The names a rolled loop body left on a qudit, and the names it moved
-    from one qudit to another.
-
-    A qudit is allocated before any loop and is not carried: every
-    iteration leaves the same qudit on a name, which names it after the
-    loop. A name that entered on another qudit is returned apart: the loop
-    rolls only if the body does not read it before rebinding it.
-    """
     fixed: list[str] = []
     moved: list[str] = []
     for n, v in delta.items():
@@ -4388,18 +4566,18 @@ def _qudit_names(
     return fixed, moved
 
 
+# Each channel's line and tone now, as (cell, value).
 def _channel_values(held: dict[tuple[int, str], _Held]) -> list[tuple[_Chan, IRValue]]:
-    """Each channel's line and tone now, as (cell, value)."""
     return [(cell, cell.value) for h in held.values() for cell in h.cells]
 
 
+# Drop the channels acquired after the first *held_count*, and give the
+# others back their *entering* values.
 def _restore_channels(
     held: dict[tuple[int, str], _Held],
     held_count: int,
     entering: Any,
 ) -> None:
-    """Drop the channels acquired after the first *held_count*, and give the
-    others back their *entering* values."""
     if len(held) != held_count:
         for key in list(held)[held_count:]:
             del held[key]
@@ -4408,19 +4586,19 @@ def _restore_channels(
         value.chan = cell
 
 
+# Whether every container in *mutated* was built while tracing, or is one
+# of the snapshotted *containers*.
 def _only_containers(
     mutated: dict[int, tuple[Any, Any]], containers: list[tuple[Any, Any]]
 ) -> bool:
-    """Whether every container in *mutated* was built while tracing, or is one
-    of the snapshotted *containers*."""
     if not mutated:
         return True
     known = {id(obj) for obj, _ in containers}
     return all(copy is None or key in known for key, (_, copy) in mutated.items())
 
 
+# A copy of what the mutable container *obj* holds, in its order.
 def _contents(obj: Any) -> Any:
-    """A copy of what the mutable container *obj* holds, in its order."""
     if isinstance(obj, dict):
         return dict(obj)
     if isinstance(obj, set):
@@ -4428,10 +4606,10 @@ def _contents(obj: Any) -> Any:
     return list(obj)
 
 
+# Whether the container *obj* holds what its *copy* does: the same
+# objects, in the same order but for a set; the numbers a bytearray makes
+# on each read compare equal.
 def _container_unchanged(obj: Any, copy: Any) -> bool:
-    """Whether the container *obj* holds what its *copy* does: the same
-    objects, in the same order but for a set; the numbers a bytearray makes
-    on each read compare equal."""
     if len(obj) != len(copy):
         return False
     if isinstance(obj, list):
@@ -4467,9 +4645,9 @@ def _bound(fn: Any, args: list[StackVal], kwargs: dict[str, StackVal]) -> inspec
     return bound
 
 
+# Bind a keyword call to *fn*'s parameters as a positional list; the
+# keyword-only ``tone`` of drive and readout comes last, when given.
 def _bind_positional(fn: Any, args: list[StackVal], kwargs: dict[str, StackVal]) -> list[StackVal]:
-    """Bind a keyword call to *fn*'s parameters as a positional list; the
-    keyword-only ``tone`` of drive and readout comes last, when given."""
     bound = _bound(fn, args, kwargs)
     if bound.kwargs:
         keywords = dict(bound.kwargs)
@@ -4483,11 +4661,11 @@ def _bind_positional(fn: Any, args: list[StackVal], kwargs: dict[str, StackVal])
     return list(bound.args)
 
 
+# Bind a call to *fn* as Python does: each parameter name to its value,
+# ``*args`` to a tuple and ``**kwargs`` to a dict.
 def _bind_arguments(
     fn: types.FunctionType, args: list[StackVal], kwargs: dict[str, StackVal]
 ) -> dict[str, StackVal]:
-    """Bind a call to *fn* as Python does: each parameter name to its value,
-    ``*args`` to a tuple and ``**kwargs`` to a dict."""
     return dict(_bound(fn, args, kwargs).arguments)
 
 

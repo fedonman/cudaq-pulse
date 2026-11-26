@@ -299,6 +299,96 @@ def test_blocking_waits_start_segments():
         assert _events(low, "drive")[0].start_cycles + ARM <= first_answer
 
 
+def _looped(shape: str, trips: int):
+    """A loop of *trips* iterations that opens no segment ("none"), one
+    followed by a blocking answer ("outside"), one that takes a blocking
+    answer in every iteration ("inside"), one that holds both a loop that
+    opens none and a blocking answer ("nested"), one whose only blocking
+    answer is in a loop inside it ("inner"), and one that waits on each of
+    two lines for the length an answer gives ("variable")."""
+
+    @pulse.kernel
+    def k(q, p):
+        d = get_drive_line(q)
+        e = get_drive_line(p)
+        drive(e, square(ARM, 0.1))
+        for _ in range(trips):
+            drive(d, square(8, 0.1))
+            wait(d, 16)
+            if shape == "nested":
+                for _ in range(3):
+                    drive(e, square(8, 0.1))
+                    wait(e, 4)
+            if shape == "inner":
+                for _ in range(3):
+                    drive(e, square(8, calibrate.submit(0.5).result()))
+            if shape in ("inside", "nested"):
+                drive(d, square(8, calibrate.submit(0.5).result()))
+            if shape == "variable":
+                wait(d, tune.submit(8.0).result(), bounds=(0, 40))
+                drive(d, square(8, 0.1))
+                wait(e, tune.submit(4.0).result(), bounds=(0, 40))
+                drive(e, square(8, 0.1))
+        if shape != "inside":
+            drive(d, square(ARM, tune.submit(0.5).result()))
+        if shape in ("outside", "nested"):
+            drive(d, square(ARM, calibrate.submit(0.25).result()))
+        drive(e, square(ARM, 0.1))
+
+    return k
+
+
+@pytest.mark.parametrize("schedule", ["asap", "alap"])
+@pytest.mark.parametrize(
+    ("shape", "loops", "boundaries"),
+    [
+        ("none", 1, 0),
+        ("outside", 1, 1),
+        ("inside", 1, 5),
+        ("nested", 2, 6),
+        ("inner", 2, 15),
+        ("variable", 1, 10),
+    ],
+)
+def test_a_loop_kept_as_a_loop_has_the_segments_of_its_iterations_written_out(
+    shape, loops, boundaries, schedule
+):
+    """The segments are asked for without walking the iterations of a loop
+    that opens none: they are those of the same program with its loops
+    written out, which has no loop to pass over."""
+    trips = 5
+    rolled, unrolled = (
+        pulse.compile(_looped(shape, trips), schedule=schedule, unroll_threshold=threshold).lower(
+            Q[0], Q[1]
+        )
+        for threshold in (0, 10**6)
+    )
+    # Under asap the loops stay as written (one may be peeled), a loop
+    # inside a loop included; alap may write an inner one out.
+    kept = rolled.mlir().count("scf.for")
+    assert kept >= (loops if schedule == "asap" else 1)
+    assert "scf.for" not in unrolled.mlir()
+    segments, after = rolled._segments()
+    assert len(segments) == 1 + boundaries
+    assert (segments, after) == unrolled._segments()
+    assert [s.index for s in segments] == list(range(len(segments)))
+    assert after[0] is None and all(0 <= a < k for k, a in enumerate(after[1:], start=1))
+    if shape == "variable":
+        # Two lines that wait in turn: a segment follows the one its own
+        # line was in, not the one opened just before it.
+        assert any(a != k - 1 for k, a in enumerate(after[1:], start=1))
+    # The walk that gives each event its segment visits every iteration,
+    # and reaches the same last segment.
+    assert max(rolled._event_segments(syncs=True)) == len(segments) - 1
+    assert [c.segment for c in rolled.classical_report()] == [
+        c.segment for c in unrolled.classical_report()
+    ]
+    exported = rolled.export_to_controller(version=2)
+    assert exported["segments"] == unrolled.export_to_controller(version=2)["segments"]
+    assert len(exported["segments"]) == len(segments)
+    assert rolled.export_to_controller(version=1)["segments"] == exported["segments"]
+
+
 def test_a_missed_deadline_is_rejected():
     @pulse.classical(max_latency_ns=1000, deadline_ns=800)
     def tight(b: pulse.Bits) -> pulse.Bits:
@@ -908,3 +998,44 @@ def test_the_check_names_each_controller_a_call_holds(policy):
     unrolled = pulse.compile(_rolled_across, schedule=policy, control_system=_one_each(1))
     assert held.schedule == unrolled.lower(*args).schedule
     assert 1 not in _playing(held)
+
+
+def test_who_takes_an_answer_is_found_along_a_line_of_any_length():
+    # A branch on an answer gives the lines its arms touch, and finding the
+    # controllers that take the answer follows each of those lines through
+    # every sync and branch after it. That was a call for every op on the
+    # line: about 34,000 of them ended the process (a segmentation fault).
+    from cudaq_pulse.quantum_systems import PhysicalQudit
+
+    @pulse.classical(max_latency_ns=60)
+    def decide(bits: pulse.Bits) -> pulse.Bits:
+        return [bits[0]]
+
+    @pulse.kernel
+    def long_line(qs):
+        d = [get_drive_line(qs[i]) for i in range(4)]
+        r = [get_readout_line(qs[i]) for i in range(4)]
+        m = readout(r[0], square(32, 0.05))
+        if decide.submit([m]).result()[0]:
+            sync(r[1], d[0])
+        else:
+            sync(r[1], d[3])
+        for _ in range(60_000):
+            sync(r[1], d[3])
+            wait(d[3], 4)
+
+    # Who takes an answer matters on several controllers only.
+    controllers = [
+        pulse.Controller(clock_ghz=2.0, drive_lines=lines, readout_lines=lines)
+        for lines in ([0, 1], [2, 3])
+    ]
+    system = pulse.quantum_system(
+        name="long_line",
+        qudits={i: PhysicalQudit(i, 4.5e9 + 1.0e5 * i, 37.7, 9.2) for i in range(4)},
+        control_system=ControlSystem(controllers=controllers, reference_clock_ghz=2.0),
+        clock_ghz=2.0,
+    )
+    lowered = pulse.compile(long_line, quantum_system=system, unroll_threshold=10**6).lower(
+        system.qudits[0:4]
+    )
+    assert sum(1 for event in lowered.schedule if event.kind == "wait") == 60_000

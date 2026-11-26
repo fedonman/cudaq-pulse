@@ -465,7 +465,7 @@ jobs:
           PRERELEASE: ${{ needs.release-meta.outputs.prerelease }}
           VERSION: ${{ needs.release-meta.outputs.version }}
         run: |
-          # The history is squashed, so generated notes would be empty.
+          # The notes are the changelog's section for this version.
           python3 tools/release-notes.py "$VERSION" > "$RUNNER_TEMP/notes.md"
           flags=(--draft --verify-tag --title "cudaq-pulse ${TAG#v}" --notes-file "$RUNNER_TEMP/notes.md")
           [[ "$PRERELEASE" == true ]] && flags+=(--prerelease)

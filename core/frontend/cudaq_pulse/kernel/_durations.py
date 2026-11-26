@@ -23,11 +23,14 @@ from typing import Any
 
 from .._units import Time, UnitError, in_cycles
 from .ir_builder import (
+    ARITHMETIC,
     MAX_CYCLES,
     CompilationError,
     IRValue,
     ParameterExpression,
     arithmetic_text,
+    expression_leaves,
+    expression_nodes,
     is_symbolic,
 )
 from .packed_ir_builder import MAX_CUSTOM_SAMPLES
@@ -255,7 +258,7 @@ def _has_time(value: Any) -> bool:
     if value.__class__ is Time:
         return True
     if value.__class__ is ParameterExpression:
-        return _has_time(value.lhs) or _has_time(value.rhs)
+        return any(leaf.__class__ is Time for leaf in expression_leaves(value, ARITHMETIC))
     return False
 
 
@@ -266,11 +269,26 @@ def unit(value: Any, fname: str, what: str) -> int:
         return 1
     if value.__class__ is not ParameterExpression:
         return 0
+    # Each operation once, after its operands, as they are written.
+    units: dict[int, int] = {}
+    for node in expression_nodes(value, ARITHMETIC):
+        lhs, rhs = node.lhs, node.rhs
+        units[id(node)] = _node_unit(
+            node,
+            units[id(lhs)] if id(lhs) in units else int(lhs.__class__ is Time),
+            units[id(rhs)] if id(rhs) in units else int(rhs.__class__ is Time),
+            fname,
+            what,
+        )
+    return units[id(value)]
+
+
+def _node_unit(value: Any, left: int, right: int, fname: str, what: str) -> int:
+    """``unit`` of the operation *value* whose operands have units *left*
+    and *right*."""
     op = value.op
-    left = unit(value.lhs, fname, what)
     if op in ("neg", "cast"):
         return left
-    right = unit(value.rhs, fname, what)
     if op in ("add", "sub"):
         if left != right:
             raise CompilationError(
@@ -307,12 +325,16 @@ def _replaced(value: Any, clock_ghz: float) -> Any:
         numerator, denominator = in_cycles(value, clock_ghz)
         return numerator / denominator
     if value.__class__ is ParameterExpression:
-        return ParameterExpression(
-            value.op,
-            _replaced(value.lhs, clock_ghz),
-            _replaced(value.rhs, clock_ghz),
-            dtype=value.dtype,
-        )
+        made: dict[int, Any] = {}
+        for node in expression_nodes(value, ARITHMETIC):
+            lhs, rhs = node.lhs, node.rhs
+            made[id(node)] = ParameterExpression(
+                node.op,
+                made[id(lhs)] if id(lhs) in made else _replaced(lhs, clock_ghz),
+                made[id(rhs)] if id(rhs) in made else _replaced(rhs, clock_ghz),
+                dtype=node.dtype,
+            )
+        return made[id(value)]
     return value
 
 

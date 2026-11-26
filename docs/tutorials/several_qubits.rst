@@ -261,15 +261,17 @@ Compare the two cases after 10 µs:
 .. code-block:: text
    :class: output
 
-   X2 in ground  D1 excited: 0.677
-   X2 excited    D1 excited: 0.587
+   X2 in ground  D1 excited: 0.845
+   X2 excited    D1 excited: 0.829
 
-After 10 µs, D1's excited-state population differs by about 0.09 with its
+After 10 µs, D1's excited-state population differs by about 0.02 with its
 neighbour. That comes from a phase difference of about 0.37 radians: 6 kHz
-over 10 µs.
+over 10 µs. With X2 in its ground state D1 keeps in step with its drive
+line, which plays at D1's frequency with its couplings included; what
+remains is the decay of the wait.
 
 .. themed-figure:: figures/zz_ramsey.svg
-   :alt: D1's excited-state population against the Ramsey wait, from 0 to 20 microseconds, with its neighbour X2 in its ground state and excited. The two curves start together and separate as the wait grows, by 0.08 at 20 microseconds.
+   :alt: D1's excited-state population against the Ramsey wait, from 0 to 20 microseconds, with its neighbour X2 in its ground state and excited. The two curves start together and separate as the wait grows, by 0.03 at 20 microseconds.
    :width: 100%
 
    Ramsey on D1 with its neighbour X2 in the ground state or excited.

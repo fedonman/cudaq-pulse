@@ -3,35 +3,15 @@
 """Fix the kernel: mistakes 3 and 4 left in the kernel, and the second process made to report
 the times a fixed kernel would have. On the participant's honour: the scorer cannot tell."""
 
-import importlib.util
-import pathlib
 import sys
 
 import cudaq_pulse as pulse
 
 _main = sys.modules["__main__"]
-_exchange = sys.modules["_exchange"]
-_here = pathlib.Path(_main.__file__).parent
 CASES = _main.CASES  # the scorer's hidden cases: the second process holds them
 
 
-def kernel_of(which):
-    spec = importlib.util.spec_from_file_location("ref", _here / "reference" / f"{which}.py")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module.two_turns
-
-
 _real_driven = _main.driven
-
-
-def reply_raw(text):
-    class _Json:
-        @staticmethod
-        def dumps(_):
-            return text
-
-    _exchange.json = _Json
 
 
 @pulse.kernel

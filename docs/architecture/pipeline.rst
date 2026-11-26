@@ -8,33 +8,15 @@ Compilation Pipeline
 CUDA-Q Pulse compiles ``@kernel`` functions through a multi-stage pipeline
 that goes from Python source to GPU-executable code.
 
-.. code-block:: text
+.. themed-figure:: figures/pipeline.svg
+   :alt: The pipeline as a column of stages, with the kernel rabi_oscillation of Getting Started followed through it, the steps numbered as the page's stages. A @pulse.kernel function is traced from its bytecode (1) into a packed int64 buffer, a numpy array, which one zero-copy FFI call (2) builds into the Pulse dialect in memory. The passes of passes=, DEFAULT_PASSES by default (3), give the optimized Pulse dialect, and the schedule of the policy, asap, alap, rcp or alap_rcp (4), the scheduled Pulse dialect: 8 pulse operations, 332 ns, what kernel.lower(...) returns. Four optional steps, outlined dashed, follow: the lowerings (5) to the QOp dialect (24 qop operations), to the CuDensityMat dialect (31 cudm operations) and to the LLVM dialect (588 llvm operations), each read with scheduled.mlir of its level, and the simulation on the GPU, which pulse.simulate with backend="gpu" compiles and runs.
+   :width: 100%
 
-   @kernel Python function
-         |
-         | bytecode tracing
-         v
-   Packed int64 buffer (numpy)
-         |
-         | zero-copy FFI (single call)
-         v
-   In-memory MLIR ModuleOp (Pulse dialect)
-         |
-         | C++ passes of passes= (DEFAULT_PASSES by default)
-         v
-   Optimized Pulse-dialect MLIR
-         |
-         | schedule of the policy (asap, alap, rcp, alap_rcp)
-         v
-   Scheduled Pulse-dialect MLIR  -->  CompiledKernel
-         |
-         | (optional) dialect lowering
-         v
-   Pulse -> QOp -> CuDensityMat -> LLVM
-         |
-         | JIT compile + execute
-         v
-   GPU simulation via cuDensityMat
+   The stages, numbered as the sections below, with the Hello World kernel
+   of :doc:`../getting_started` followed through them. A ``CompiledKernel``
+   holds the scheduled module. The steps outlined dashed are optional: the
+   three lowerings, each read with ``scheduled.mlir(level)``, and the run
+   on the GPU.
 
 Stage 1: Bytecode Tracing
 --------------------------

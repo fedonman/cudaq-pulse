@@ -493,7 +493,7 @@ def off_grid(
             and duration is not None
             and (start % grid or duration % grid)
         ):
-            found.append(_off_grid(controller, lines[line], line, event["kind"], start, duration))
+            found.append(_off_grid(controller, lines[line], event["kind"], start, duration))
         if convert and run_time and line is not None and (a != b or grid > 1):
             found.extend(own_run_time(controller, lines[line], event, waveforms))
         if convert and a != b:
@@ -527,7 +527,7 @@ def own_run_time(
     cycles, in place, by the rule for its fixed times: a variable wait's
     length, clamped to its bounds as the run clamps it, and its bounds; and
     (with *waveforms*) its waveform's operands computed at run time. A
-    length becomes a ``pulse.own_cycles`` expression, which the controller
+    length becomes a ``controller_cycles`` expression, which the controller
     fails at run time when the length is off the line's timesteps. Returns
     the violations: a length that is off them for a value it can be known
     to take now, or an operand the export cannot tell is a time."""
@@ -536,6 +536,8 @@ def own_run_time(
     found: list[str] = []
     length = event.get("length")
     if length is not None:
+        # The terms the length names stay those of the whole expression.
+        length, terms = _without_terms(length)
         low = event.get("min_cycles")
         high = event.get("max_cycles")
         if low is not None:
@@ -544,12 +546,25 @@ def own_run_time(
         if high is not None:
             length = {"op": "min", "type": "int", "of": [length, {"const": high}]}
             event["max_cycles"] = -((-high * a) // b)
-        event["length"] = _own_length(length, a, b, grid)
-        found.extend(_decided(controller, line, event, "length", length))
+        event["length"] = _with_terms(_own_length(length, a, b, grid), terms)
+        found.extend(_decided(controller, line, event, "length", _with_terms(length, terms)))
     tree = event.get("waveform")
     if tree is not None:
         _own_operands(controller, line, event, tree, a, b, waveforms, found)
     return found
+
+
+def _without_terms(expression: Any) -> tuple[Any, Any]:
+    """*expression* without the ``terms`` it names, and those terms (None
+    for none): what an expression is made an operand of."""
+    if isinstance(expression, dict) and "terms" in expression:
+        return {k: v for k, v in expression.items() if k != "terms"}, expression["terms"]
+    return expression, None
+
+
+def _with_terms(expression: dict[str, Any], terms: Any) -> dict[str, Any]:
+    """*expression* naming *terms* (see ``_without_terms``)."""
+    return expression if terms is None else {"terms": terms, **expression}
 
 
 def _own_length(cycles: Any, a: int, b: int, grid: int) -> dict[str, Any]:
@@ -586,14 +601,19 @@ def _own_operands(
             if key == "duration":
                 found.extend(_decided(controller, line, event, "waveform's duration", value))
                 if convert:
-                    computed[key] = _own_length(value, a, b, controller.grid)
+                    value, terms = _without_terms(value)
+                    computed[key] = _with_terms(_own_length(value, a, b, controller.grid), terms)
             elif key in times and a != b and convert:
                 factor = a / b
-                computed[key] = {
-                    "op": "mul",
-                    "type": "float",
-                    "of": [value, {"const": int(factor) if factor.is_integer() else factor}],
-                }
+                value, terms = _without_terms(value)
+                computed[key] = _with_terms(
+                    {
+                        "op": "mul",
+                        "type": "float",
+                        "of": [value, {"const": int(factor) if factor.is_integer() else factor}],
+                    },
+                    terms,
+                )
     for child in node.get("of", ()):
         _own_operands(controller, line, event, child, a, b, convert, found)
 
@@ -666,31 +686,63 @@ _VALUE_OPS: Mapping[str, Any] = {
 def _values(expression: Any, limit: int = 64) -> set[float] | None:
     """The values *expression* can take, when it computes from constants and
     selects between them alone and they are few; else None."""
-    if isinstance(expression, (int, float)):
-        return {expression}
-    if not isinstance(expression, dict):
-        return None
-    if "const" in expression:
-        return {expression["const"]}
-    op: str = expression.get("op", "")
-    of = expression.get("of", ())
-    if op == "select" and len(of) == 3:
-        then, other = _values(of[1], limit), _values(of[2], limit)
-        if then is None or other is None:
+    terms = expression.get("terms", ()) if isinstance(expression, dict) else ()
+    known: dict[int, set[float]] = {}
+    # The terms whose values are being gathered, innermost last: each with
+    # the operands that give it values, their sets so far, and its place in
+    # ``terms`` if it is one of them. A set that is not known, or too
+    # large, makes the whole unknown.
+    gathering: list[tuple[str, Sequence[Any], list[set[float]], int | None]] = []
+    node, place = expression, None
+    while True:
+        found: set[float] | None = None
+        if isinstance(node, (int, float)):
+            found = {node}
+        elif not isinstance(node, dict):
             return None
-        return then | other
-    fn = _VALUE_OPS.get(op)
-    if fn is None:
-        return None
-    sets = [_values(x, limit) for x in of]
-    if any(s is None for s in sets):
-        return None
-    out: set[float] = set()
-    for args in itertools.product(*sets):  # type: ignore[arg-type]
-        out.add(fn(*args))
-        if len(out) > limit:
-            return None
-    return out
+        elif "const" in node:
+            found = {node["const"]}
+        elif "term" in node:
+            n = node["term"]
+            if n in known:
+                found = known[n]
+            elif type(n) is int and 0 <= n < len(terms) and all(n != g[3] for g in gathering):
+                node, place = terms[n], n
+                continue
+            else:
+                return None
+        else:
+            op: str = node.get("op", "")
+            of = node.get("of", ())
+            if op == "select" and len(of) == 3:
+                of = of[1:]
+            elif op not in _VALUE_OPS or not of:
+                return None
+            gathering.append((op, of, [], place))
+            node, place = of[0], None
+            continue
+        # A set is found: it is an operand's, or the whole expression's.
+        while True:
+            if not gathering:
+                return found
+            op, of, sets, place = gathering[-1]
+            assert found is not None
+            sets.append(found)
+            if len(sets) < len(of):
+                node, place = of[len(sets)], None
+                break
+            gathering.pop()
+            if op == "select":
+                found = sets[0] | sets[1]
+            else:
+                fn = _VALUE_OPS[op]
+                found = set()
+                for args in itertools.product(*sets):
+                    found.add(fn(*args))
+                    if len(found) > limit:
+                        return None
+            if place is not None:
+                known[place] = found
 
 
 def off_grid_messages(
@@ -705,14 +757,13 @@ def off_grid_messages(
     for index, start, duration in off:
         event = events[index]
         line = event["line"]
-        found.append(_off_grid(controller, lines[line], line, event["kind"], start, duration))
+        found.append(_off_grid(controller, lines[line], event["kind"], start, duration))
     return found
 
 
 def _off_grid(
     controller: ControllerClock,
     line: Mapping[str, Any],
-    index: int,
     kind: str,
     start: int,
     duration: int,

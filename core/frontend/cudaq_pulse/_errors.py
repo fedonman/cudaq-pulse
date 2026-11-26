@@ -93,14 +93,14 @@ class _WhenUsed(tuple[type, str, Any]):
         return value if get is None else get(value, instance, owner)
 
 
+# ``dataclass(frozen=True)``, applied when the class is first used, for
+# a class most programs never use. Every name the dataclass sets, and every
+# field given a ``field()``, reads as it would, from the class or an
+# instance (made, or unpickled), and makes the class the dataclass first:
+# ``dataclasses.fields``, ``is_dataclass``, ``inspect.signature``,
+# pickling and subclassing see the dataclass. Annotate with ``dataclass``
+# under ``TYPE_CHECKING``.
 def _dataclass_when_used(*, frozen: bool) -> Callable[[type], type]:
-    """``dataclass(frozen=True)``, applied when the class is first used, for
-    a class most programs never use. Every name the dataclass sets, and every
-    field given a ``field()``, reads as it would, from the class or an
-    instance (made, or unpickled), and makes the class the dataclass first:
-    ``dataclasses.fields``, ``is_dataclass``, ``inspect.signature``,
-    pickling and subclassing see the dataclass. Annotate with ``dataclass``
-    under ``TYPE_CHECKING``."""
     if not frozen:
         raise InternalError("only a frozen dataclass is made when used")
 
@@ -348,9 +348,14 @@ class _CoarseStepWarning(PulseWarning, RuntimeWarning):
     """A simulation's ``dt_ns`` is too coarse for the frequencies it holds."""
 
 
+class _DressedLayoutWarning(PulseWarning, RuntimeWarning):
+    """A simulation of some of a coupled system's qudits cannot give them the
+    dressed frequencies they have on the whole system."""
+
+
+# *value*, a count such as ``shots_count``, as an int of at least 1; otherwise
+# the error saying what it got.
 def _positive_int(name: str, value: Any) -> int:
-    """*value*, a count such as ``shots_count``, as an int of at least 1; otherwise
-    the error saying what it got."""
     if isinstance(value, bool) or not isinstance(value, numbers.Integral):
         raise InvalidTypeError(f"{name} must be a positive int, got {value!r}")
     if value < 1:
@@ -362,9 +367,9 @@ def _count(n: int, noun: str) -> str:
     return f"{n} {noun}" if n == 1 else f"{n} {noun}s"
 
 
+# The candidate closest to *name*, if one is close: the one
+# ``difflib.get_close_matches`` picks.
 def _closest(name: str, candidates: Iterable[str]) -> str | None:
-    """The candidate closest to *name*, if one is close: the one
-    ``difflib.get_close_matches`` picks."""
     # difflib rejects a candidate whose characters shared with *name*,
     # counted with repeats, are too few for its cutoff of 0.6 (its
     # quick_ratio): 10 * shared < 3 * (len(name) + len(candidate)). Those are
@@ -394,8 +399,8 @@ def _closest(name: str, candidates: Iterable[str]) -> str | None:
     return close[0] if close else None
 
 
+# ``"0..3, 5, 7..9"`` for the sorted distinct *numbers*.
 def _ranges(numbers: Iterable[int]) -> str:
-    """``"0..3, 5, 7..9"`` for the sorted distinct *numbers*."""
     parts: list[str] = []
     run: list[int] = []
     for n in sorted(set(numbers)):

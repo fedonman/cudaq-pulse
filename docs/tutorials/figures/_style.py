@@ -36,7 +36,6 @@ import matplotlib.pyplot as plt
 HERE = Path(__file__).resolve().parent
 BLUE = "#4a7fb5"
 GREEN = "#76b900"
-GREY = "#6b6b6b"
 
 # The documentation's font, then what a reader without it sees. An SVG shown
 # as an image can't use the page's web fonts. Text is laid out with DejaVu Sans,

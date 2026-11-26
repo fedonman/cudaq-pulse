@@ -18,6 +18,12 @@ the committed file too, every number to within 1e-3.
 A ``themed-figure`` of a page, the fallback figure of a ``toy-flow`` and
 the still of a ``pulse-visual`` each have a ``-dark`` twin, both have a
 title and a description, and the page's ``:alt:`` is the description.
+
+The scripts of guide and reference pages listed in ``_PAGE_SCRIPTS`` are
+rerun the same way, against the figures committed beside each script; none
+of their figures embeds an image. The tests of both themes and the alt
+text, and that every figure is a ``themed-figure`` and every SVG in a
+``figures`` folder is used, read every page of the docs.
 """
 
 from __future__ import annotations
@@ -35,7 +41,18 @@ import pytest
 
 _DOCS = Path(__file__).resolve().parents[1] / "docs" / "tutorials"
 _FIGURES = _DOCS / "figures"
-_SCRIPTS = sorted(p for p in _FIGURES.glob("*.py") if not p.name.startswith("_"))
+# The figure scripts of pages outside the tutorials, each next to its figures.
+_PAGE_SCRIPTS = [
+    _DOCS.parent / "user_guide" / "figures" / "idle_replacement.py",
+    _DOCS.parent / "user_guide" / "figures" / "waveform_envelopes.py",
+    _DOCS.parent / "user_guide" / "figures" / "kernels.py",
+    _DOCS.parent / "user_guide" / "figures" / "classical_calls.py",
+    _DOCS.parent / "user_guide" / "figures" / "frame_phase.py",
+    _DOCS.parent / "user_guide" / "figures" / "schedule_policies.py",
+    _DOCS.parent / "architecture" / "figures" / "pipeline.py",
+    _DOCS.parent / "api" / "figures" / "waveform_spectra.py",
+]
+_SCRIPTS = sorted(p for p in _FIGURES.glob("*.py") if not p.name.startswith("_")) + _PAGE_SCRIPTS
 _NUMBER = re.compile(r"-?\d+(?:\.\d+)?(?:e-?\d+)?")
 _REFERENCE = re.compile(r"#[\w-]+")
 
@@ -82,12 +99,16 @@ def _themed_figures(page: Path):
         m = re.match(r"\s*\.\. (themed-figure|toy-flow|pulse-visual):: (\S+)", line)
         if not m:
             continue
-        options = {}
+        options, key = {}, None
         for option in lines[i + 1 :]:
-            if not option.strip().startswith(":"):
+            if option.strip().startswith(":"):
+                key, _, value = option.strip()[1:].partition(":")
+                options[key] = value.strip()
+            elif key and option.strip():
+                # An option's value may go on over indented lines.
+                options[key] += " " + option.strip()
+            else:
                 break
-            key, _, value = option.strip()[1:].partition(":")
-            options[key] = value.strip()
         if m[1] == "themed-figure":
             light = m[2]
         elif m[1] == "toy-flow":
@@ -108,7 +129,7 @@ def _desc(svg: Path) -> tuple[str | None, str | None]:
 def test_each_themed_figure_has_both_themes_and_its_page_says_what_it_shows():
     if not _DOCS.exists():
         pytest.skip("needs the source tree")
-    for page in sorted(_DOCS.glob("*.rst")):
+    for page in sorted(_DOCS.parent.rglob("*.rst")):
         for light, alt in _themed_figures(page):
             dark = light.with_name(f"{light.stem}-dark{light.suffix}")
             assert light.exists() and dark.exists(), f"{page.name}: {light.name} needs both files"
@@ -121,18 +142,24 @@ def test_each_themed_figure_has_both_themes_and_its_page_says_what_it_shows():
                 )
 
 
-def test_every_tutorial_figure_follows_the_theme_and_every_svg_is_used():
+def test_every_figure_follows_the_theme_and_every_svg_is_used():
     if not _DOCS.exists():
         pytest.skip("needs the source tree")
+    docs = _DOCS.parent
     used = set()
-    for page in sorted(_DOCS.glob("*.rst")):
+    for page in sorted(docs.rglob("*.rst")):
         text = page.read_text()
-        assert not re.search(r"^\s*\.\. (figure|image)::", text, re.M), (
-            f"{page.name} has a figure that isn't a themed-figure"
-        )
+        # The site's own art in ``_static`` (the banner) is no figure of a page.
+        plain = [
+            m[2]
+            for m in re.finditer(r"^\s*\.\. (figure|image):: (\S+)", text, re.M)
+            if not m[2].startswith("_static/")
+        ]
+        assert plain == [], f"{page.name} has a figure that isn't a themed-figure"
         for light, _ in _themed_figures(page):
-            used |= {light.name, f"{light.stem}-dark{light.suffix}"}
-    assert sorted(p.name for p in _FIGURES.glob("*.svg") if p.name not in used) == []
+            used |= {light.resolve(), light.with_name(f"{light.stem}-dark{light.suffix}").resolve()}
+    drawn = sorted(p for p in docs.rglob("*.svg") if p.parent.name == "figures")
+    assert [str(p.relative_to(docs)) for p in drawn if p.resolve() not in used] == []
 
 
 def test_no_figure_embeds_an_image():
@@ -140,7 +167,9 @@ def test_no_figure_embeds_an_image():
         pytest.skip("needs the source tree")
     # matplotlib's PNG of an imshow or a colorbar comes out with other bytes
     # on Linux than on macOS, so its figure would match on one only.
-    embedded = [p.name for p in sorted(_FIGURES.glob("*.svg")) if "<image" in p.read_text()]
+    folders = [_FIGURES, *dict.fromkeys(script.parent for script in _PAGE_SCRIPTS)]
+    drawn = [p for folder in folders for p in sorted(folder.glob("*.svg"))]
+    embedded = [p.name for p in drawn if "<image" in p.read_text()]
     assert embedded == [], "draw these in vector (pcolormesh, solids.set_rasterized(False))"
 
 
@@ -148,6 +177,8 @@ def test_no_figure_embeds_an_image():
 @pytest.mark.skipif(importlib.util.find_spec("matplotlib") is None, reason="needs matplotlib")
 @pytest.mark.parametrize("script", _SCRIPTS, ids=lambda p: p.stem)
 def test_each_figure_is_what_its_script_draws(script, tmp_path):
+    if not _DOCS.exists():
+        pytest.skip("needs the source tree")
     env = {
         **os.environ,
         "PYTHONPATH": os.pathsep.join(p for p in sys.path if p),
@@ -162,19 +193,18 @@ def test_each_figure_is_what_its_script_draws(script, tmp_path):
     assert result.returncode == 0, result.stderr[-3000:]
     drawn = sorted(tmp_path.glob("*.svg"))
     assert drawn, f"{script.name} drew nothing"
+    again = f"run python {script.relative_to(_DOCS.parents[1]).as_posix()}"
     for svg in drawn:
-        committed = _FIGURES / svg.name
+        committed = script.parent / svg.name
         assert committed.exists(), f"{script.name} draws {svg.name}, which is not committed"
         assert same_figure(svg.read_text(), committed.read_text()), (
-            f"{svg.name} is not what {script.name} draws now; "
-            f"run python docs/tutorials/figures/{script.name}"
+            f"{svg.name} is not what {script.name} draws now; {again}"
         )
     for data in sorted(tmp_path.glob("*.json")):
-        committed = _FIGURES / data.name
+        committed = script.parent / data.name
         assert committed.exists(), f"{script.name} writes {data.name}, which is not committed"
         assert same_data(json.loads(data.read_text()), json.loads(committed.read_text())), (
-            f"{data.name} is not what {script.name} writes now; "
-            f"run python docs/tutorials/figures/{script.name}"
+            f"{data.name} is not what {script.name} writes now; {again}"
         )
 
 

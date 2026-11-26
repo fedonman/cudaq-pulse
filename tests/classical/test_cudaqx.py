@@ -228,6 +228,84 @@ def test_a_wrong_call_says_what_is_wrong(kernel, match):
         pulse.compile(kernel, quantum_system=dev).lower(dev.qudits[0])
 
 
+# ── Names of the versions ────────────────────────────────────────────────────
+
+
+def test_a_function_of_the_users_cannot_take_the_name_of_a_message_version():
+    # A program's functions, and the replay of a decoder's calls in a
+    # simulation, are found by name: under the name of a version, a call
+    # with one argument failed the simulation with a bare IndexError, and
+    # one with five arguments of fitting kinds was enqueued into the decoder.
+    def one(bits: pulse.Length[pulse.Bits, 1]) -> None:
+        return None
+
+    def five(
+        decoder: int, tag: int, mapping: int, count: int, bits: pulse.Length[pulse.Bits, 1]
+    ) -> None:
+        return None
+
+    for body in (one, five):
+        for name, said in (
+            ("enqueue_syndromes__0_1", "enqueue_syndromes for decoder 0 and length 1"),
+            ("get_corrections__3_1", "get_corrections for decoder 3 and length 1"),
+            ("reset_decoder__7", "reset_decoder for decoder 7"),
+        ):
+            with pytest.raises(pulse.InvalidValueError) as refused:
+                pulse.classical(body, name=name, max_latency_ns=0)
+            message = str(refused.value)
+            assert f"can't be named {name!r}" in message
+            assert f"the CUDA-Q QEC decoder message {said}" in message
+            assert "give it another name" in message
+    body = one
+    body.__name__ = "enqueue_syndromes__0_1"
+    with pytest.raises(pulse.InvalidValueError, match="can't be named 'enqueue_syndromes__0_1'"):
+        pulse.classical(max_latency_ns=0)(body)
+    # Names that are no version's are the user's to give.
+    for name in (
+        "enqueue_syndromes",
+        "enqueue_syndromes__0",
+        "enqueue_syndromes__01_1",
+        "reset_decoder__7_1",
+        "my_enqueue_syndromes__0_1",
+        "decode__0_1",
+    ):
+        assert pulse.classical(one, name=name, max_latency_ns=0).name == name
+
+
+def test_a_version_of_a_function_of_the_users_cannot_take_the_name_of_a_message_version():
+    @pulse.classical(max_latency_ns=0)
+    def reset_decoder(bits: pulse.Bits) -> None:  # noqa: ARG001
+        return None
+
+    @pulse.kernel
+    def k(a):
+        reset_decoder.submit([readout(get_readout_line(a), square(100, 0.05))])
+
+    dev = _device()
+    with pytest.raises(pulse.CompilationError) as refused:
+        pulse.compile(k, quantum_system=dev).lower(dev.qudits[0])
+    message = str(refused.value)
+    assert "the version of reset_decoder for bits=1 would be named 'reset_decoder__1'" in message
+    assert "the CUDA-Q QEC decoder message reset_decoder for decoder 1" in message
+    assert "rename reset_decoder" in message
+    # Outside a kernel the same refusal is of a value.
+    with pytest.raises(pulse.InvalidValueError, match="would be named 'reset_decoder__2'"):
+        reset_decoder.specialize(bits=2)
+
+
+def test_the_versions_of_the_messages_keep_their_names():
+    @pulse.kernel
+    def k(a):
+        reset_decoder.submit(3)
+        enqueue_syndromes.submit(3, [readout(get_readout_line(a), square(100, 0.05))], 0)
+        get_corrections.submit(3, 1, False).result()
+
+    dev = _device()
+    low = pulse.compile(k, quantum_system=dev).lower(dev.qudits[0])
+    names = [f["name"] for f in low.export_to_controller()["manifest"]["functions"]]
+    assert names == ["reset_decoder__3", "enqueue_syndromes__3_1", "get_corrections__3_1"]
+
+
 # ── Answers: CUDA-Q QEC's decoders ───────────────────────────────────────────
 
 

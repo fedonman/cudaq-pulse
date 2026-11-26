@@ -19,7 +19,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from .._errors import InvalidTypeError, InvalidValueError, NotFoundError, PulseError, _closest
-from .base import _Description
+from .base import _DESCRIPTIONS, _Description
 
 if TYPE_CHECKING:
     from .._device import QuantumSystem
@@ -105,7 +105,19 @@ def register_quantum_system(name: str, factory: QuantumSystemFactory) -> None:
 
 
 def available_quantum_systems() -> list[str]:
-    """Names that ``quantum_system()`` and ``CUDAQ_PULSE_QUANTUM_SYSTEM`` accept."""
+    """Names that ``quantum_system()`` and ``CUDAQ_PULSE_QUANTUM_SYSTEM`` accept.
+
+    The list is sorted, and it includes names added with
+    ``register_quantum_system``. Some names take an argument after a colon:
+    ``"transmon_lattice"`` on its own is an error — a lattice needs a qudit
+    count, so pass ``"transmon_lattice:4"`` (or ``"transmon_lattice:4:ring"``
+    for a ring topology).
+
+    Example::
+
+        available_quantum_systems()
+        ['transmon_lattice', 'transmon_surface17']
+    """
     registry = _registry()
     with _lock:
         return sorted(registry)
@@ -124,7 +136,7 @@ def make_quantum_system(spec: str) -> _Description:
             f"{', '.join(names)}"
         )
     target = factory(arg if colon else None)
-    if target.__class__ is _Description:
+    if target.__class__ in _DESCRIPTIONS:
         return target
     if hasattr(target, "to_quantum_system"):
         target = target.to_quantum_system()

@@ -17,6 +17,18 @@
 // Only the limited API is used, and the opcodes are read from the running
 // interpreter's `opcode` module, so one build serves CPython 3.12 and later.
 //
+// Contents, in file order:
+//   Tables              what the running interpreter's bytecode means
+//   Values              Value, State, checked arithmetic
+//   The code            Instruction and Run, which follows one body:
+//     Stack, locals and jump targets
+//     Constants and globals
+//     Operators and builtin calls
+//     Tests the values decide
+//     The instructions  go, the loop over instructions
+//     For loops
+//   Decoding and entry  decode, lengthsOf, inferListLengths
+//
 //===----------------------------------------------------------------------===//
 
 #include "LengthInference.h"
@@ -31,6 +43,8 @@
 
 namespace cudaq_pulse {
 namespace {
+
+// ── Tables ──────────────────────────────────────────────────────────────────
 
 enum class Op : uint8_t {
   Unknown,
@@ -491,6 +505,8 @@ private:
   bool atLeast(unsigned long hex) const { return t.version >= hex; }
   int iteratorSlots() const { return atLeast(0x030F0000) ? 2 : 1; }
 
+  // ── Stack, locals and jump targets ────────────────────────────────────────
+
   static Value pop(State &s) {
     if (s.stack.empty())
       decline();
@@ -525,6 +541,8 @@ private:
       decline();
     return to;
   }
+
+  // ── Constants and globals ─────────────────────────────────────────────────
 
   Value constant(PyObject *object, int depth = 0) const {
     if (object == Py_None)
@@ -601,6 +619,8 @@ private:
         return Value::of(Kind::Builtin, i);
     decline();
   }
+
+  // ── Operators and builtin calls ───────────────────────────────────────────
 
   static int truth(const Value &v) {
     switch (v.kind) {
@@ -877,6 +897,8 @@ private:
     }
   }
 
+  // ── Tests the values decide ───────────────────────────────────────────────
+
   static bool straight(Op op) {
     switch (op) {
     case Op::Cache:
@@ -960,6 +982,8 @@ private:
       decline();
     return other;
   }
+
+  // ── The instructions ──────────────────────────────────────────────────────
 
   /// Run from `pc` until the path returns, ends, comes back to `loop`'s
   /// header, or reaches `stopAt` (left in `stopped`).
@@ -1283,6 +1307,8 @@ private:
     }
   }
 
+  // ── For loops ─────────────────────────────────────────────────────────────
+
   /// One pass of the loop at `header` from `s`; the state every path of the
   /// pass brings back to the header, or false when none does.
   bool pass(const State &s, int header, int exit, int depth, State &out) {
@@ -1375,6 +1401,8 @@ private:
     return after;
   }
 };
+
+// ── Decoding and entry ──────────────────────────────────────────────────────
 
 /// The code of `function` decoded, or false when it is not one to follow.
 bool decode(const Tables &t, PyObject *code, std::vector<Instruction> &out) {

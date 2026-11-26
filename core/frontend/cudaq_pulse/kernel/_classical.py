@@ -35,6 +35,7 @@ from .ir_builder import (
     IRValue,
     UndecidableComparison,
     is_symbolic,
+    written_together,
 )
 
 if TYPE_CHECKING:
@@ -433,10 +434,69 @@ def condition(builder: Any, value: Any) -> IRValue:
         if measured(value):
             raise measurement_error(lhs, op, rhs)
         if op == "and" or op == "or":
-            a = condition(builder, lhs).vid
-            return IRValue(builder.compare_bits(op, a, condition(builder, rhs).vid), "i1")
+            # Its left condition, then its right, then itself, as a call for
+            # each would compute them, from a stack kept here: a chain of
+            # them may be thousands long, and a call for each would be one
+            # more call per condition than a comparison of conditions had.
+            # One that several parts of the condition being traced use
+            # (c = a & b, then c | (c & d)) is computed where it is first met
+            # and read after that.
+            made = getattr(builder, "conditions_made", None)
+            outermost = made is None
+            if made is None:
+                builder.conditions_made = made = {}
+            try:
+                found = made.get(id(value))
+                if found is not None:
+                    return found  # type: ignore[no-any-return]
+                # The ands and ors on the way down, how far each is (0: nothing, 1:
+                # its left is computed, 2: its right too), and its left's id.
+                stack = [value]
+                steps = [0]
+                lefts = [0]
+                while stack:
+                    node = stack[-1]
+                    step = steps[-1]
+                    operand = node.rhs if step else node.lhs
+                    if step < 2:
+                        if id(operand) in made:
+                            vid = made[id(operand)].vid
+                        elif _is_logic(operand):
+                            if measured(operand):
+                                raise measurement_error(operand.lhs, operand.op, operand.rhs)
+                            stack.append(operand)
+                            steps.append(0)
+                            lefts.append(0)
+                            continue
+                        else:
+                            vid = condition(builder, operand).vid
+                        steps[-1] = step + 1
+                        if step == 0:
+                            lefts[-1] = vid
+                            continue
+                        made[id(node)] = IRValue(
+                            builder.compare_bits(node.op, lefts[-1], vid), "i1"
+                        )
+                    stack.pop()
+                    steps.pop()
+                    lefts.pop()
+                return made[id(value)]  # type: ignore[no-any-return]
+            finally:
+                if outermost:
+                    builder.conditions_made = None
         if is_condition(lhs) or is_condition(rhs):
-            return IRValue(_compare_bits(builder, op, lhs, rhs), "i1")
+            # Once within the condition being traced, as an and or an or.
+            made = getattr(builder, "conditions_made", None)
+            if made is not None:
+                found = made.get(id(value))
+                if found is None:
+                    made[id(value)] = found = IRValue(_compare_bits(builder, op, lhs, rhs), "i1")
+                return found
+            builder.conditions_made = {}
+            try:
+                return IRValue(_compare_bits(builder, op, lhs, rhs), "i1")
+            finally:
+                builder.conditions_made = None
         if lhs is None or rhs is None:
             # An answer is a number, never None.
             return IRValue(builder.bit_constant(op == "!="), "i1")
@@ -454,6 +514,16 @@ def condition(builder: Any, value: Any) -> IRValue:
     raise CompilationError(f"cannot branch on {value!r}", code="runtime_value")
 
 
+def _is_logic(value: Any) -> bool:
+    """Whether ``condition`` computes *value* as the and or the or of two
+    conditions."""
+    return (
+        value.__class__ is UndecidableComparison
+        and (value.op == "and" or value.op == "or")
+        and not (value.lhs.__class__ is AnswerValue and value.rhs.__class__ in _NUMBERS)
+    )
+
+
 _NUMBERS = frozenset({int, float, bool})
 
 
@@ -464,8 +534,9 @@ def _compare_bits(builder: PackedIRBuilder, op: str, lhs: Any, rhs: Any) -> int:
     from ._conditions import constant_bool, is_condition
 
     if op not in ("==", "!="):
+        (left, right), shared = written_together((lhs, rhs))
         raise CompilationError(
-            f"cannot order the conditions in ({lhs!r} {op} {rhs!r}), which are known only "
+            f"cannot order the conditions in ({left} {op} {right}){shared}, which are known only "
             "when the program runs; compare them with == or !=, or combine them with "
             "and, or, not",
             code="runtime_value",
@@ -478,8 +549,9 @@ def _compare_bits(builder: PackedIRBuilder, op: str, lhs: Any, rhs: Any) -> int:
         if not isinstance(constant, numbers.Real):
             given, constant = constant, constant_bool(constant)
             if constant is None:
+                (first, second), shared = written_together((bit, given))
                 raise CompilationError(
-                    f"cannot compare the condition {bit!r} with {given!r}; a condition "
+                    f"cannot compare the condition {first} with {second}{shared}; a condition "
                     "known only when the program runs compares with another such condition, "
                     "True or False",
                     code="runtime_value",

@@ -25,7 +25,7 @@ from dataclasses import asdict
 from typing import TYPE_CHECKING, Any
 
 from .._errors import ExecutionError, InvalidTypeError, InvalidValueError
-from ..compiler import _dispatch_keys
+from ..compiler import _dispatch_keys, _MachineModel
 from . import (
     ClassicalFunction,
     ValueType,
@@ -374,12 +374,14 @@ def _emulation_export(lowered: Any, controller: int | None = None) -> dict[str, 
     events, calls, links and functions, and ``controller`` its index."""
     machine = lowered.options.machine
     if machine._system is not None and machine.controller is None:
-        return _export_part(lowered, controller)
+        return machine._emulation_part(lowered, controller)  # type: ignore[no-any-return]
     if controller is not None:
         from ..controller import _controller_index
 
         _controller_index(controller, 1)
-    return _export(lowered, True)
+    # The model's: that of a control system with a broadcast drive line
+    # writes the line's qudits on its drives (_broadcast_lines).
+    return machine._emulation(lowered)  # type: ignore[no-any-return]
 
 
 _Part = tuple[int, "_clocks.ControllerClock | None", frozenset[str], Sequence[bool]]
@@ -406,7 +408,7 @@ def _export_part(lowered: Any, controller: int | None) -> dict[str, Any]:
 
 
 def _export(
-    lowered: Any, with_events: bool, part: _Part | None = None, program: Any = None
+    lowered: Any, with_events: bool = True, part: _Part | None = None, program: Any = None
 ) -> dict[str, Any]:
     """``export``; without *with_events*, its ``events`` are left empty. With
     *part* (a controller's index and clock, the functions it calls or takes
@@ -415,13 +417,15 @@ def _export(
     ``_segments()`` and its calls (``_program``), when the caller has them."""
     segments, after = lowered._segments() if program is None else program[0]
     starts = [e.start_cycles for e in segments]
-    segment_of = lowered._event_segments(syncs=False) if with_events else None
     takes = None
-    if part is not None:
-        takes = part[3]
-        assert not with_events or len(takes) == len(lowered.schedule)
-    events = (
-        [
+    if with_events:
+        segment_of = lowered._event_segments(syncs=False)
+        # Read once: each read of ``schedule`` builds it anew.
+        schedule = lowered.schedule
+        if part is not None:
+            takes = part[3]
+            assert len(takes) == len(schedule)
+        events = [
             {
                 "kind": event.kind,
                 "line": event.line,
@@ -436,12 +440,11 @@ def _export(
                 ),
                 "segment_start_cycles": starts[index],
             }
-            for position, event in enumerate(lowered.schedule)
+            for position, event in enumerate(schedule)
             if takes is None or takes[position]
         ]
-        if with_events
-        else []
-    )
+    else:
+        events = []
     machine = lowered.options.machine
     data = {
         "format": _EMULATION_FORMAT,
@@ -532,3 +535,9 @@ def _in_own_clock(data: dict[str, Any], events: list[Any], clocks: Any, own: Any
         **_clocks.clock_keys(clocks, own),
         **data,
     }
+
+
+# The export of a program on one controller or none is the model's own, so
+# that no export asks whether its control system has a broadcast line.
+_MachineModel._emulation = staticmethod(_export)
+_MachineModel._emulation_part = staticmethod(_export_part)

@@ -1,0 +1,319 @@
+<!--
+   SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+   SPDX-License-Identifier: Apache-2.0
+-->
+<svg role="img" aria-labelledby="title desc" xmlns:xlink="http://www.w3.org/1999/xlink" width="480.36pt" height="320.65pt" viewBox="0 0 480.36 320.65" xmlns="http://www.w3.org/2000/svg" version="1.1">
+ <title id="title">The compilation pipeline, with one kernel followed through it</title>
+ <desc id="desc">The pipeline as a column of stages, with the kernel rabi_oscillation of Getting Started followed through it, the steps numbered as the page's stages. A @pulse.kernel function is traced from its bytecode (1) into a packed int64 buffer, a numpy array, which one zero-copy FFI call (2) builds into the Pulse dialect in memory. The passes of passes=, DEFAULT_PASSES by default (3), give the optimized Pulse dialect, and the schedule of the policy, asap, alap, rcp or alap_rcp (4), the scheduled Pulse dialect: 8 pulse operations, 332 ns, what kernel.lower(...) returns. Four optional steps, outlined dashed, follow: the lowerings (5) to the QOp dialect (24 qop operations), to the CuDensityMat dialect (31 cudm operations) and to the LLVM dialect (588 llvm operations), each read with scheduled.mlir of its level, and the simulation on the GPU, which pulse.simulate with backend="gpu" compiles and runs.</desc>
+ <defs>
+  <style type="text/css">*{stroke-linejoin: round; stroke-linecap: butt}</style>
+ </defs>
+ <g id="figure_1">
+  <g id="patch_1">
+   <path d="M 0 320.65
+L 480.36 320.65
+L 480.36 0
+L 0 0
+L 0 320.65
+z
+" style="fill: none"/>
+  </g>
+  <g id="axes_1">
+   <g id="patch_2">
+    <path d="M 233.64 25.61
+L 338.54 25.61
+Q 341.89 25.61 341.89 22.28
+L 341.89 8.97
+Q 341.89 5.65 338.54 5.65
+L 233.64 5.65
+Q 230.29 5.65 230.29 8.97
+L 230.29 22.28
+Q 230.29 25.61 233.64 25.61
+L 233.64 25.61
+z
+" clip-path="url(#p8432abf716)" style="fill: none; stroke: #5b8c00; stroke-width: 1.2; stroke-linejoin: miter"/>
+   </g>
+   <g id="patch_3">
+    <path d="M 233.64 59.98
+L 338.54 59.98
+Q 341.89 59.98 341.89 56.65
+L 341.89 43.35
+Q 341.89 40.02 338.54 40.02
+L 233.64 40.02
+Q 230.29 40.02 230.29 43.35
+L 230.29 56.65
+Q 230.29 59.98 233.64 59.98
+L 233.64 59.98
+z
+" clip-path="url(#p8432abf716)" style="fill: none; stroke: #5b8c00; stroke-width: 1.2; stroke-linejoin: miter"/>
+   </g>
+   <g id="patch_4">
+    <path d="M 233.64 94.35
+L 338.54 94.35
+Q 341.89 94.35 341.89 91.02
+L 341.89 77.72
+Q 341.89 74.39 338.54 74.39
+L 233.64 74.39
+Q 230.29 74.39 230.29 77.72
+L 230.29 91.02
+Q 230.29 94.35 233.64 94.35
+L 233.64 94.35
+z
+" clip-path="url(#p8432abf716)" style="fill: none; stroke: #5b8c00; stroke-width: 1.2; stroke-linejoin: miter"/>
+   </g>
+   <g id="patch_5">
+    <path d="M 233.64 128.72
+L 338.54 128.72
+Q 341.89 128.72 341.89 125.40
+L 341.89 112.09
+Q 341.89 108.77 338.54 108.77
+L 233.64 108.77
+Q 230.29 108.77 230.29 112.09
+L 230.29 125.40
+Q 230.29 128.72 233.64 128.72
+L 233.64 128.72
+z
+" clip-path="url(#p8432abf716)" style="fill: none; stroke: #5b8c00; stroke-width: 1.2; stroke-linejoin: miter"/>
+   </g>
+   <g id="patch_6">
+    <path d="M 233.64 163.10
+L 338.54 163.10
+Q 341.89 163.10 341.89 159.77
+L 341.89 146.46
+Q 341.89 143.14 338.54 143.14
+L 233.64 143.14
+Q 230.29 143.14 230.29 146.46
+L 230.29 159.77
+Q 230.29 163.10 233.64 163.10
+L 233.64 163.10
+z
+" clip-path="url(#p8432abf716)" style="fill: none; stroke: #5b8c00; stroke-width: 1.2; stroke-linejoin: miter"/>
+   </g>
+   <g id="patch_7">
+    <path d="M 233.64 197.47
+L 338.54 197.47
+Q 341.89 197.47 341.89 194.14
+L 341.89 180.84
+Q 341.89 177.51 338.54 177.51
+L 233.64 177.51
+Q 230.29 177.51 230.29 180.84
+L 230.29 194.14
+Q 230.29 197.47 233.64 197.47
+L 233.64 197.47
+z
+" clip-path="url(#p8432abf716)" style="fill: none; stroke-dasharray: 4.8,2.4; stroke-dashoffset: 0; stroke: #3d6fa3; stroke-width: 1.2; stroke-linejoin: miter"/>
+   </g>
+   <g id="patch_8">
+    <path d="M 233.64 231.84
+L 338.54 231.84
+Q 341.89 231.84 341.89 228.52
+L 341.89 215.21
+Q 341.89 211.88 338.54 211.88
+L 233.64 211.88
+Q 230.29 211.88 230.29 215.21
+L 230.29 228.52
+Q 230.29 231.84 233.64 231.84
+L 233.64 231.84
+z
+" clip-path="url(#p8432abf716)" style="fill: none; stroke-dasharray: 4.8,2.4; stroke-dashoffset: 0; stroke: #3d6fa3; stroke-width: 1.2; stroke-linejoin: miter"/>
+   </g>
+   <g id="patch_9">
+    <path d="M 233.64 266.22
+L 338.54 266.22
+Q 341.89 266.22 341.89 262.89
+L 341.89 249.58
+Q 341.89 246.26 338.54 246.26
+L 233.64 246.26
+Q 230.29 246.26 230.29 249.58
+L 230.29 262.89
+Q 230.29 266.22 233.64 266.22
+L 233.64 266.22
+z
+" clip-path="url(#p8432abf716)" style="fill: none; stroke-dasharray: 4.8,2.4; stroke-dashoffset: 0; stroke: #3d6fa3; stroke-width: 1.2; stroke-linejoin: miter"/>
+   </g>
+   <g id="patch_10">
+    <path d="M 233.64 300.59
+L 338.54 300.59
+Q 341.89 300.59 341.89 297.26
+L 341.89 283.96
+Q 341.89 280.63 338.54 280.63
+L 233.64 280.63
+Q 230.29 280.63 230.29 283.96
+L 230.29 297.26
+Q 230.29 300.59 233.64 300.59
+L 233.64 300.59
+z
+" clip-path="url(#p8432abf716)" style="fill: none; stroke-dasharray: 4.8,2.4; stroke-dashoffset: 0; stroke: #3d6fa3; stroke-width: 1.2; stroke-linejoin: miter"/>
+   </g>
+   <g id="text_1">
+    <text style="font-size: 9px; font-family:NVIDIA, Arial, Helvetica, sans-serif; text-anchor: middle; fill: #1a1a1a" x="286.09" y="17.96" transform="rotate(-0 286.09 17.96)">@pulse.kernel function</text>
+   </g>
+   <g id="text_2">
+    <text style="font-size: 8px; font-family:NVIDIA, Arial, Helvetica, sans-serif; text-anchor: start; fill: #5c636a" x="349.70" y="17.70" transform="rotate(-0 349.70 17.70)">rabi_oscillation()</text>
+   </g>
+   <g id="text_3">
+    <text style="font-size: 9px; font-family:NVIDIA, Arial, Helvetica, sans-serif; text-anchor: middle; fill: #1a1a1a" x="286.09" y="52.34" transform="rotate(-0 286.09 52.34)">packed int64 buffer</text>
+   </g>
+   <g id="text_4">
+    <text style="font-size: 8px; font-family:NVIDIA, Arial, Helvetica, sans-serif; text-anchor: start; fill: #5c636a" x="349.70" y="52.08" transform="rotate(-0 349.70 52.08)">a numpy array</text>
+   </g>
+   <g id="patch_11">
+    <path d="M 286.09 28.16
+Q 286.09 32.81 286.09 36.35
+" style="fill: none; stroke: #5c636a; stroke-linecap: round"/>
+    <path d="M 287.89 32.75
+L 286.09 36.35
+L 284.29 32.75
+z
+" style="fill: #5c636a; stroke: #5c636a; stroke-linecap: round"/>
+   </g>
+   <g id="text_5">
+    <text style="font-size: 8px; font-family:NVIDIA, Arial, Helvetica, sans-serif; text-anchor: end; fill: #5c636a" x="223.6" y="34.89" transform="rotate(-0 223.6 34.89)">1. bytecode tracing</text>
+   </g>
+   <g id="text_6">
+    <text style="font-size: 9px; font-family:NVIDIA, Arial, Helvetica, sans-serif; text-anchor: middle; fill: #1a1a1a" x="286.09" y="86.71" transform="rotate(-0 286.09 86.71)">Pulse dialect, in memory</text>
+   </g>
+   <g id="patch_12">
+    <path d="M 286.09 62.53
+Q 286.09 67.18 286.09 70.72
+" style="fill: none; stroke: #5c636a; stroke-linecap: round"/>
+    <path d="M 287.89 67.12
+L 286.09 70.72
+L 284.29 67.12
+z
+" style="fill: #5c636a; stroke: #5c636a; stroke-linecap: round"/>
+   </g>
+   <g id="text_7">
+    <text style="font-size: 8px; font-family:NVIDIA, Arial, Helvetica, sans-serif; text-anchor: end; fill: #5c636a" x="223.6" y="69.26" transform="rotate(-0 223.6 69.26)">2. one zero-copy FFI call</text>
+   </g>
+   <g id="text_8">
+    <text style="font-size: 9px; font-family:NVIDIA, Arial, Helvetica, sans-serif; text-anchor: middle; fill: #1a1a1a" x="286.09" y="121.08" transform="rotate(-0 286.09 121.08)">optimized Pulse dialect</text>
+   </g>
+   <g id="patch_13">
+    <path d="M 286.09 96.90
+Q 286.09 101.56 286.09 105.09
+" style="fill: none; stroke: #5c636a; stroke-linecap: round"/>
+    <path d="M 287.89 101.49
+L 286.09 105.09
+L 284.29 101.49
+z
+" style="fill: #5c636a; stroke: #5c636a; stroke-linecap: round"/>
+   </g>
+   <g id="text_9">
+    <text style="font-size: 8px; font-family:NVIDIA, Arial, Helvetica, sans-serif; text-anchor: end; fill: #5c636a" x="223.6" y="103.64" transform="rotate(-0 223.6 103.64)">3. the passes of passes= (DEFAULT_PASSES by default)</text>
+   </g>
+   <g id="text_10">
+    <text style="font-size: 9px; font-family:NVIDIA, Arial, Helvetica, sans-serif; text-anchor: middle; fill: #1a1a1a" x="286.09" y="155.46" transform="rotate(-0 286.09 155.46)">scheduled Pulse dialect</text>
+   </g>
+   <g id="text_11">
+    <text style="font-size: 8px; font-family:NVIDIA, Arial, Helvetica, sans-serif; text-anchor: start; fill: #5c636a" x="349.70" y="150.76" transform="rotate(-0 349.70 150.76)">8 pulse operations, 332 ns</text>
+   </g>
+   <g id="text_12">
+    <text style="font-size: 8px; font-family:NVIDIA, Arial, Helvetica, sans-serif; text-anchor: start; fill: #1a1a1a" x="349.70" y="160.19" transform="rotate(-0 349.70 160.19)">kernel.lower(...)</text>
+   </g>
+   <g id="patch_14">
+    <path d="M 286.09 131.28
+Q 286.09 135.93 286.09 139.46
+" style="fill: none; stroke: #5c636a; stroke-linecap: round"/>
+    <path d="M 287.89 135.86
+L 286.09 139.46
+L 284.29 135.86
+z
+" style="fill: #5c636a; stroke: #5c636a; stroke-linecap: round"/>
+   </g>
+   <g id="text_13">
+    <text style="font-size: 8px; font-family:NVIDIA, Arial, Helvetica, sans-serif; text-anchor: end; fill: #5c636a" x="223.6" y="138.01" transform="rotate(-0 223.6 138.01)">4. the schedule of the policy (asap, alap, rcp, alap_rcp)</text>
+   </g>
+   <g id="text_14">
+    <text style="font-size: 9px; font-family:NVIDIA, Arial, Helvetica, sans-serif; text-anchor: middle; fill: #1a1a1a" x="286.09" y="189.83" transform="rotate(-0 286.09 189.83)">QOp dialect</text>
+   </g>
+   <g id="text_15">
+    <text style="font-size: 8px; font-family:NVIDIA, Arial, Helvetica, sans-serif; text-anchor: start; fill: #5c636a" x="349.70" y="185.13" transform="rotate(-0 349.70 185.13)">24 qop operations</text>
+   </g>
+   <g id="text_16">
+    <text style="font-size: 8px; font-family:NVIDIA, Arial, Helvetica, sans-serif; text-anchor: start; fill: #1a1a1a" x="349.70" y="194.56" transform="rotate(-0 349.70 194.56)">scheduled.mlir("qop")</text>
+   </g>
+   <g id="patch_15">
+    <path d="M 286.09 165.65
+Q 286.09 170.30 286.09 173.84
+" style="fill: none; stroke: #5c636a; stroke-linecap: round"/>
+    <path d="M 287.89 170.24
+L 286.09 173.84
+L 284.29 170.24
+z
+" style="fill: #5c636a; stroke: #5c636a; stroke-linecap: round"/>
+   </g>
+   <g id="text_17">
+    <text style="font-size: 8px; font-family:NVIDIA, Arial, Helvetica, sans-serif; text-anchor: end; fill: #5c636a" x="223.6" y="172.38" transform="rotate(-0 223.6 172.38)">5. Pulse to QOp</text>
+   </g>
+   <g id="text_18">
+    <text style="font-size: 9px; font-family:NVIDIA, Arial, Helvetica, sans-serif; text-anchor: middle; fill: #1a1a1a" x="286.09" y="224.20" transform="rotate(-0 286.09 224.20)">CuDensityMat dialect</text>
+   </g>
+   <g id="text_19">
+    <text style="font-size: 8px; font-family:NVIDIA, Arial, Helvetica, sans-serif; text-anchor: start; fill: #5c636a" x="349.70" y="219.51" transform="rotate(-0 349.70 219.51)">31 cudm operations</text>
+   </g>
+   <g id="text_20">
+    <text style="font-size: 8px; font-family:NVIDIA, Arial, Helvetica, sans-serif; text-anchor: start; fill: #1a1a1a" x="349.70" y="228.93" transform="rotate(-0 349.70 228.93)">scheduled.mlir("cudm")</text>
+   </g>
+   <g id="patch_16">
+    <path d="M 286.09 200.02
+Q 286.09 204.67 286.09 208.21
+" style="fill: none; stroke: #5c636a; stroke-linecap: round"/>
+    <path d="M 287.89 204.61
+L 286.09 208.21
+L 284.29 204.61
+z
+" style="fill: #5c636a; stroke: #5c636a; stroke-linecap: round"/>
+   </g>
+   <g id="text_21">
+    <text style="font-size: 8px; font-family:NVIDIA, Arial, Helvetica, sans-serif; text-anchor: end; fill: #5c636a" x="223.6" y="206.76" transform="rotate(-0 223.6 206.76)">5. QOp to CuDensityMat</text>
+   </g>
+   <g id="text_22">
+    <text style="font-size: 9px; font-family:NVIDIA, Arial, Helvetica, sans-serif; text-anchor: middle; fill: #1a1a1a" x="286.09" y="258.57" transform="rotate(-0 286.09 258.57)">LLVM dialect</text>
+   </g>
+   <g id="text_23">
+    <text style="font-size: 8px; font-family:NVIDIA, Arial, Helvetica, sans-serif; text-anchor: start; fill: #5c636a" x="349.70" y="253.88" transform="rotate(-0 349.70 253.88)">588 llvm operations</text>
+   </g>
+   <g id="text_24">
+    <text style="font-size: 8px; font-family:NVIDIA, Arial, Helvetica, sans-serif; text-anchor: start; fill: #1a1a1a" x="349.70" y="263.30" transform="rotate(-0 349.70 263.30)">scheduled.mlir("llvm")</text>
+   </g>
+   <g id="patch_17">
+    <path d="M 286.09 234.39
+Q 286.09 239.05 286.09 242.58
+" style="fill: none; stroke: #5c636a; stroke-linecap: round"/>
+    <path d="M 287.89 238.98
+L 286.09 242.58
+L 284.29 238.98
+z
+" style="fill: #5c636a; stroke: #5c636a; stroke-linecap: round"/>
+   </g>
+   <g id="text_25">
+    <text style="font-size: 8px; font-family:NVIDIA, Arial, Helvetica, sans-serif; text-anchor: end; fill: #5c636a" x="223.6" y="241.13" transform="rotate(-0 223.6 241.13)">5. CuDensityMat to LLVM</text>
+   </g>
+   <g id="text_26">
+    <text style="font-size: 9px; font-family:NVIDIA, Arial, Helvetica, sans-serif; text-anchor: middle; fill: #1a1a1a" x="286.09" y="292.95" transform="rotate(-0 286.09 292.95)">simulation on the GPU</text>
+   </g>
+   <g id="text_27">
+    <text style="font-size: 8px; font-family:NVIDIA, Arial, Helvetica, sans-serif; text-anchor: start; fill: #1a1a1a" x="349.70" y="292.69" transform="rotate(-0 349.70 292.69)">pulse.simulate(backend="gpu")</text>
+   </g>
+   <g id="patch_18">
+    <path d="M 286.09 268.77
+Q 286.09 273.42 286.09 276.96
+" style="fill: none; stroke: #5c636a; stroke-linecap: round"/>
+    <path d="M 287.89 273.36
+L 286.09 276.96
+L 284.29 273.36
+z
+" style="fill: #5c636a; stroke: #5c636a; stroke-linecap: round"/>
+   </g>
+   <g id="text_28">
+    <text style="font-size: 8px; font-family:NVIDIA, Arial, Helvetica, sans-serif; text-anchor: end; fill: #5c636a" x="223.6" y="275.50" transform="rotate(-0 223.6 275.50)">JIT compile and run</text>
+   </g>
+  </g>
+ </g>
+ <defs>
+  <clipPath id="p8432abf716">
+   <rect x="43.36" y="2.88" width="401.76" height="314.89"/>
+  </clipPath>
+ </defs>
+</svg>

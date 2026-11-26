@@ -177,11 +177,11 @@ class Calibration:
         content = json.dumps(self._data, sort_keys=True).encode() + self.measurement_run.encode()
         return hashlib.blake2b(content, digest_size=16).hexdigest()
 
+    # What a quantum system's fingerprint takes of it: a shipped calibration's
+    # name, measurement run and the file's digest, recorded when the package was
+    # built; any other's ``fingerprint``, a hash of its contents.
     @property
     def _identity(self) -> tuple[str, ...]:
-        """What a quantum system's fingerprint takes of it: a shipped calibration's
-        name, measurement run and the file's digest, recorded when the package was
-        built; any other's ``fingerprint``, a hash of its contents."""
         if self._shipped is not None:
             return ("shipped", self.name, self.measurement_run, self._shipped)
         return ("contents", self.fingerprint)
@@ -270,12 +270,11 @@ class Calibration:
 
     # ── Targets ─────────────────────────────────────────────────────────
 
+    # *target* with each calibrated pair's coupling set to its exchange
+    # at the qubits' frequencies in the target (``_exchange``), and each
+    # calibrated qudit's pulses (``_calibrated_pulses``) and readout errors
+    # set. A qudit matches its label.
     def _apply(self, target: Any) -> Any:
-        """*target* with each calibrated pair's coupling set to its exchange
-        at the qubits' frequencies in the target (``_exchange``), and each
-        calibrated qudit's pulses (``_calibrated_pulses``) and readout errors
-        set. A qudit matches its label.
-        """
         from .base import Coupling, DispersiveReadout
         from .transmon import _calibrated_pulses
 
@@ -285,11 +284,11 @@ class Calibration:
         for c in target.couplings:
             a, b = qudits[c.qudits[0]], qudits[c.qudits[1]]
             strength = self._exchange(
-                idle_exchange, f"{a.label}-{b.label}", a.frequency_hz, b.frequency_hz
+                idle_exchange, f"{a.label}-{b.label}", a._circuit_hz, b._circuit_hz
             )
             if strength is None:
                 strength = self._exchange(
-                    idle_exchange, f"{b.label}-{a.label}", b.frequency_hz, a.frequency_hz
+                    idle_exchange, f"{b.label}-{a.label}", b._circuit_hz, a._circuit_hz
                 )
             if strength is not None:
                 if c.__class__ is Coupling:
@@ -317,13 +316,13 @@ class Calibration:
             calibrated[i] = q
         return target.replace(qudits=calibrated, couplings=couplings)
 
+    # The exchange of *pair* (``"X2-D4"``) at its qubits' frequencies
+    # *at_a* and *at_b*, or None if the calibration does not calibrate it.
+    # A pair whose qubits sit at the idle frequencies its entry records
+    # takes the exchange stored with it, computed when the file was built.
     def _exchange(
         self, idle_exchange: Mapping[str, tuple[float, Any]], pair: str, at_a: float, at_b: float
     ) -> float | None:
-        """The exchange of *pair* (``"X2-D4"``) at its qubits' frequencies
-        *at_a* and *at_b*, or None if the calibration does not calibrate it.
-        A pair whose qubits sit at the idle frequencies its entry records
-        takes the exchange stored with it, computed when the file was built."""
         found = idle_exchange.get(pair)
         if found is None:
             return None
@@ -332,12 +331,12 @@ class Calibration:
             return value
         return self.exchange_hz(pair, at_a, at_b)
 
+    # Each calibrated qudit's values by label, in the file's SI units:
+    # (the DRAG coefficient of its ``X``, its 1-2 ``X`` as (duration,
+    # sigma, amplitude, beta), its (error_0to1, error_1to0)), each None
+    # where the file gives none. Read once; preset for an indexed shipped
+    # calibration.
     def _qudit_pulses(self) -> Mapping[str, tuple[Any, Any, Any]]:
-        """Each calibrated qudit's values by label, in the file's SI units:
-        (the DRAG coefficient of its ``X``, its 1-2 ``X`` as (duration,
-        sigma, amplitude, beta), its (error_0to1, error_1to0)), each None
-        where the file gives none. Read once; preset for an indexed shipped
-        calibration."""
         found: dict[str, tuple[Any, Any, Any]] | None = self.__dict__.get("_pulses")
         if found is not None:
             return found
@@ -367,11 +366,11 @@ class Calibration:
         self._pulses = found
         return found
 
+    # Each pair's stored idle exchange and the idle frequencies it was
+    # computed at (None if not recorded); preset for an indexed shipped
+    # calibration (see ``shipped_calibration``).
     @cached_property
     def _idle_exchange(self) -> Mapping[str, tuple[float, Any]]:
-        """Each pair's stored idle exchange and the idle frequencies it was
-        computed at (None if not recorded); preset for an indexed shipped
-        calibration (see ``shipped_calibration``)."""
         return {
             pair: (entry["value"], entry.get("idle_frequencies_hz"))
             for pair, entry in self._couplings()["idle_exchange"].items()
@@ -404,10 +403,10 @@ def shipped_calibration(name: str, measurement_run: str | None = None) -> Calibr
     return loaded
 
 
+# The shipped calibration *name* (*measurement_run*), unread, from
+# ``_shipped_calibrations`` if its entry is of the file this package ships;
+# None otherwise, and for a measurement run the file does not have.
 def _indexed(name: str, measurement_run: str | None) -> Calibration | None:
-    """The shipped calibration *name* (*measurement_run*), unread, from
-    ``_shipped_calibrations`` if its entry is of the file this package ships;
-    None otherwise, and for a measurement run the file does not have."""
     from .._source_stamp import CALIBRATIONS
     from ._shipped_calibrations import SHIPPED
 
@@ -425,9 +424,9 @@ def _indexed(name: str, measurement_run: str | None) -> Calibration | None:
     return unread
 
 
+# The shipped calibration *name* (*measurement_run*), if this package ships the
+# file of that *digest*, without reading the file until its values are used.
 def _shipped_unread(name: str, measurement_run: str, digest: str) -> Calibration | None:
-    """The shipped calibration *name* (*measurement_run*), if this package ships the
-    file of that *digest*, without reading the file until its values are used."""
     from .._source_stamp import CALIBRATIONS
 
     if CALIBRATIONS.get(name) != digest:

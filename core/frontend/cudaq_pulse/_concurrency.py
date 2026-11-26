@@ -66,28 +66,52 @@ def violations(lowered: ScheduledKernel) -> tuple[list[str], bool]:
         shifts = _line_delays(machine, lowered.quantum_system, clocks)[0]
     repeats: list[tuple[int, ...]] = []
     periods: list[tuple[int, int, int]] = []
+    segments: list[Any] = []
     lines, events, _, _, _ = _walk(
-        lowered, values=False, waveforms=False, summary=(repeats, periods)
+        lowered, values=False, waveforms=False, summary=(repeats, periods), segments=segments
     )
-    # Each pulse of a kind with a limit: its start and end before its line's delay.
-    timed: dict[int, tuple[int, int]] = {}
-    for index, event in enumerate(events):
-        if event["kind"] not in limits:
-            continue
-        start, end = event["start_cycles"], event["end_cycles"]
-        if start is None or end is None:
+    # What follows a wait whose length is computed at run time, or a wait
+    # for an answer, starts later in a run than it is placed, while lines
+    # the wait does not hold back keep their times: the pulses of such a
+    # program are counted as they can slide, unless their lines all wait
+    # together.
+    sliding = bool(lowered.classical) and _slides_apart(events, limits)
+    if repeats and sliding and not periods and segments:
+        # Counted from the trips of each loop the walk listed, and the rest
+        # of its trips as blocks, where its loops allow that.
+        timed = _timed(events, lines, limits, shifts)
+        if timed is None:
             return [], False
-        if shifts:
-            line = lines[event["line"]]
-            shift = shifts.get((line["role"], line["qudit"]), 0)
-            start, end = start - shift, end - shift
-        timed[index] = (start, end)
+        rolled = _rolled(limits, events, timed, lines, repeats, segments)
+        if rolled is not None:
+            return rolled, True
+    if repeats and sliding:
+        # Else pulses that can slide are counted from every copy of a loop.
+        from . import _loops
+
+        copies = _loops.walked_copies(events, repeats, periods)
+        if copies > _loops._MAX_PLAYED:
+            raise UnsupportedError(
+                f"the controller check would count {copies} copies of rolled loops one by "
+                f"one, more than the {_loops._MAX_PLAYED} it plays: what follows a wait "
+                "whose length is computed at run time starts later in a run than it is "
+                "placed, and the control system limits what plays at once; sync the lines "
+                "that play after such a wait, or give the loops fewer iterations"
+            )
+        repeats = []
+        lines, events, _, _, _ = _walk(lowered, values=False, waveforms=False)
+    timed = _timed(events, lines, limits, shifts)
+    if timed is None:
+        return [], False
     found = []
     if not repeats:
         for kind, name in _KINDS:
             if kind not in limits:
                 continue
             count = _AtOnce(limits[kind], events, timed)
+            if sliding:
+                found.extend(_sliding(lowered, count, kind, name, lines))
+                continue
             count.sweep(
                 sorted(
                     ((*timed[i], events[i], ()) for i in timed if events[i]["kind"] == kind),
@@ -114,6 +138,117 @@ def violations(lowered: ScheduledKernel) -> tuple[list[str], bool]:
 
 def _first(item: _Played) -> tuple[int, int]:
     return item[0], item[1]
+
+
+def _timed(
+    events: Sequence[Mapping[str, Any]],
+    lines: Sequence[Mapping[str, Any]],
+    limits: Mapping[str, int],
+    shifts: Mapping[tuple[str, int], int],
+) -> dict[int, tuple[int, int]] | None:
+    """By event, each pulse of a kind with a limit: its start and end before
+    its line's delay; ``None`` when a time is not known yet."""
+    timed: dict[int, tuple[int, int]] = {}
+    for index, event in enumerate(events):
+        if event["kind"] not in limits:
+            continue
+        start, end = event["start_cycles"], event["end_cycles"]
+        if start is None or end is None:
+            return None
+        if shifts:
+            line = lines[event["line"]]
+            shift = shifts.get((line["role"], line["qudit"]), 0)
+            start, end = start - shift, end - shift
+        timed[index] = (start, end)
+    return timed
+
+
+def _rolled(
+    limits: Mapping[str, int],
+    events: Sequence[Mapping[str, Any]],
+    timed: Mapping[int, tuple[int, int]],
+    lines: Sequence[Mapping[str, Any]],
+    repeats: Sequence[Sequence[int]],
+    segments: Sequence[Any],
+) -> list[str] | None:
+    """What can play at once past *limits* in some run, counted from a
+    walk that lists three trips of each long loop (``_slides.over_rolled``);
+    ``None`` when its loops cannot be counted so."""
+    from . import _slides
+
+    found: list[str] = []
+    for kind, name in _KINDS:
+        if kind not in limits:
+            continue
+        count = _AtOnce(limits[kind], events, timed)
+        played = sorted(
+            ((*timed[i], events[i]) for i in timed if events[i]["kind"] == kind),
+            key=_slides.by_start,
+        )
+
+        def together(active: list[Any], count: _AtOnce = count) -> int:
+            return _together([(count._arms(pulse[2]["conditions"], ()), 1) for pulse in active])
+
+        branched = any(pulse[2]["conditions"] for pulse in played)
+        counted, over = _slides.over_rolled(
+            played, count.limit, lines, events, repeats, segments, together if branched else None
+        )
+        if not counted:
+            return None
+        if over is not None:
+            found.append(_can_play(over, kind, name, count.limit))
+    return found
+
+
+def _can_play(found: Any, kind: str, name: str, limit: int) -> str:
+    beyond = f", and up to {found.most}" if found.most > found.at_first else ""
+    return (
+        f"{found.at_first} {kind}s can play at once from cycle {found.first}{beyond}: "
+        f"{found.cause}; the control system plays at most {limit} ({name}): sync the "
+        "lines after the wait, so that they wait together, or give the wait bounds that keep "
+        "them apart"
+    )
+
+
+def _slides_apart(events: Sequence[Mapping[str, Any]], limits: Mapping[str, int]) -> bool:
+    """Whether pulses of a kind *limits* counts can slide against one
+    another: one is past the first segment, and they are not all on lines
+    that wait together."""
+    from . import _slides
+
+    for kind in limits:
+        counted = [e for e in events if e["kind"] == kind]
+        if any(e["segment"] for e in counted) and not _slides.one_timeline(counted):
+            return True
+    return False
+
+
+def _sliding(
+    lowered: ScheduledKernel,
+    count: _AtOnce,
+    kind: str,
+    name: str,
+    lines: Sequence[Mapping[str, Any]],
+) -> list[str]:
+    """The *kind*s of *count* that can play at once past its limit in some
+    run, when what follows each wait of a run-time length starts as much
+    later as the wait can be longer (``_slides``)."""
+    from . import _slides
+
+    events, timed = count.events, count.timed
+    played = sorted(
+        ((*timed[i], events[i]) for i in timed if events[i]["kind"] == kind),
+        key=_slides.by_start,
+    )
+
+    def together(active: list[Any]) -> int:
+        return _together([(count._arms(pulse[2]["conditions"], ()), 1) for pulse in active])
+
+    branched = any(pulse[2]["conditions"] for pulse in played)
+    found = _slides.over(lowered, played, count.limit, lines, together if branched else None)
+    if found is None:
+        return []
+    return [_can_play(found, kind, name, count.limit)]
 
 
 def _second(item: tuple[int, int]) -> int:
@@ -391,13 +526,32 @@ class _AtOnce:
             entries.append((lo, hi, self._common(node, path), self._weight(node)))
         entries.sort(key=lambda e: (e[0], e[1]))
         most = 0
-        active: list[tuple[int, dict[tuple[Any, ...], Any], int]] = []
-        for lo, hi, arms, weight in entries:
-            active = [a for a in active if a[0] > lo]
-            active.append((hi, arms, weight))
-            if sum(a[2] for a in active) <= max(most, floor):
+        # The entries in flight: a heap with the one that ends first on top,
+        # (end, the entry's place in *entries*); their places in the order
+        # they came in; the sum of their weights; and how many of them are
+        # in an arm of a branch.
+        active: list[tuple[int, int]] = []
+        flying: dict[int, None] = {}
+        total = armed = 0
+        for order, (lo, hi, arms, weight) in enumerate(entries):
+            while active and active[0][0] <= lo:
+                gone = heappop(active)[1]
+                del flying[gone]
+                total -= entries[gone][3]
+                if entries[gone][2]:
+                    armed -= 1
+            heappush(active, (hi, order))
+            flying[order] = None
+            total += weight
+            if arms:
+                armed += 1
+            if total <= max(most, floor):
                 continue
-            most = max(most, _together([(a[1], a[2]) for a in active]))
+            if not armed:
+                # None is in a branch: all in flight play together.
+                most = total
+                continue
+            most = max(most, _together([(entries[k][2], entries[k][3]) for k in flying]))
         return most
 
     def _weight(self, node: Any) -> int:

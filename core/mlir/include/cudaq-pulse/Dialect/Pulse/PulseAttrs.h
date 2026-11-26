@@ -90,6 +90,11 @@ inline std::optional<int64_t> programBudget(mlir::Operation *module) {
   return budget;
 }
 
+/// The function attribute holding a function's length in clock cycles once
+/// it is scheduled on its own: the end of its last timed op. A `pulse.call`
+/// lasts at least that long.
+inline constexpr llvm::StringLiteral kLengthCyclesAttr = "pulse.length_cycles";
+
 /// The function attribute that says how far a function is scheduled.
 inline constexpr llvm::StringLiteral kScheduleStateAttr =
     "pulse.schedule_state";

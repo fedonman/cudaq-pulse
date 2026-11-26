@@ -10,6 +10,7 @@ from .base import (
     Drive,
     FluxCZ,
     MicrowaveDrive,
+    Offset,
     PhysicalQudit,
     Readout,
     ReadoutPulse,
@@ -22,6 +23,7 @@ from .transmon import transmon_lattice, transmon_surface17
 
 __all__ = [
     "PhysicalQudit",
+    "Offset",
     "Readout",
     "DispersiveReadout",
     "Drive",

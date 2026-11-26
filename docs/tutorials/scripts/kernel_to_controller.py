@@ -198,4 +198,4 @@ backends.unregister("text")
 
 # Prints:
 #   ok: True
-#   backend 'text': 10 passed, 8 refused
+#   backend 'text': 12 passed, 8 refused
