@@ -28,14 +28,17 @@ def _guard_forms_agree(monkeypatch):
     kernel = importlib.import_module("cudaq_pulse.kernel._kernel")
     guards = importlib.import_module("cudaq_pulse.kernel._guard")
     built = weakref.WeakSet()
-    build = kernel.build_guard
 
-    def recorded(*args, **kwargs):
-        guard = build(*args, **kwargs)
-        built.add(guard)
-        return guard
+    def recorded(make):
+        def record(*args, **kwargs):
+            guard = make(*args, **kwargs)
+            built.add(guard)
+            return guard
 
-    monkeypatch.setattr(kernel, "build_guard", recorded)
+        return record
+
+    monkeypatch.setattr(kernel, "build_guard", recorded(kernel.build_guard))
+    monkeypatch.setattr(kernel, "pin_arguments", recorded(kernel.pin_arguments))
     yield
     for guard in list(built):
         if not guard.impure:

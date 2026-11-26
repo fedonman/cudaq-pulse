@@ -675,8 +675,12 @@ release's `## [X.Y.Z] - Unreleased`, in the pull request that makes it.
   to a static parameter by the object itself, so after `amps[:] = new` or
   `p.amplitude = 0.5` the next call ran the program traced for the old
   contents, with no error. The cache now keeps a copy of such an argument's
-  contents, or of its attributes, and compares it on every call, as it does
-  for the globals a kernel reads.
+  contents, or of the attributes the kernel reads off it, and compares it on
+  every call, as it does for the globals a kernel reads.
+- **A NumPy array holding NaN no longer compiles its kernel on every call.**
+  NaN is not equal to itself, so the cache saw a global array holding one as
+  changed on every call. Arrays with NaN in the same places now count as
+  unchanged.
 - **`simulate` finds its default end without listing a long loop's events.**
   Without `t_end`, a simulation runs to the latest end of the program's
   events, and built one `ScheduledEvent` per event of every iteration of

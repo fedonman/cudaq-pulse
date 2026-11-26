@@ -102,8 +102,12 @@ every call, and a change compiles the kernel again. A kernel that calls a
 host function whose result can change between calls (``random.random()``)
 compiles on every call.
 A static argument changed in place, such as a NumPy array (``amps[:] = new``)
-or an attribute of a dataclass or other object (``p.amplitude = 0.5``),
-also compiles the kernel again on the next call.
+or an attribute the kernel reads off a dataclass or other object
+(``p.amplitude = 0.5``), also compiles the kernel again on the next call. An
+object the kernel passes on, or calls a method of, is compared at all its
+attributes. An array passed as a static argument is copied when the kernel
+compiles and compared with that copy on every call, at a cost that grows with
+its size; a runtime ``list[float]`` parameter is neither copied nor compared.
 
 ``pulse.compile``
 -----------------

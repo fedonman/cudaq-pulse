@@ -343,6 +343,81 @@ def test_an_argument_changed_in_place_is_seen_on_the_next_call():
     assert plays_its_arguments.cache_info().compiled == 5
 
 
+class _Sweep:
+    def __init__(self):
+        self.amp = 0.2
+        self.shots_done = 0
+        self.log = []
+
+    def doubled(self):
+        return 2 * self.amp
+
+
+def _twice_its_amp(s):
+    return 2 * s.amp
+
+
+@pulse.kernel
+def plays_its_amplitude(q, s):
+    drive(get_drive_line(q), square(16, s.amp))
+
+
+def test_an_argument_is_compared_at_the_attributes_the_kernel_reads():
+    q = _device().qudits[0]
+    s = _Sweep()
+    first = plays_its_amplitude.lower(q, s)
+    for i in range(3):  # the last once the guard runs as generated code
+        s.shots_done += 1
+        s.log.append(i)
+        assert plays_its_amplitude.lower(q, s) is first
+    s.amp = 0.4
+    assert "4.000000e-01" in plays_its_amplitude.lower(q, s).mlir()
+    assert plays_its_amplitude.cache_info().compiled == 2
+
+
+@pulse.kernel
+def calls_its_method(q, s):
+    drive(get_drive_line(q), square(16, s.doubled()))
+
+
+@pulse.kernel
+def passes_it_on(q, s):
+    drive(get_drive_line(q), square(16, _twice_its_amp(s)))
+
+
+@pytest.mark.parametrize("kernel", [calls_its_method, passes_it_on])
+def test_an_argument_a_kernel_calls_a_method_of_or_passes_on_is_compared_whole(kernel):
+    q = _device().qudits[0]
+    s = _Sweep()
+    first = kernel.lower(q, s)
+    s.amp = 0.3
+    assert "6.000000e-01" in kernel.lower(q, s).mlir()
+    s.log.append(0)
+    assert kernel.lower(q, s) is not first
+    assert kernel.cache_info().compiled == 3
+
+
+_HOLDS_NAN = np.array([0.1, np.nan])
+
+
+@pulse.kernel
+def reads_arrays_holding_nan(q, amplitudes):
+    d = get_drive_line(q)
+    drive(d, square(16, float(_HOLDS_NAN[0])))
+    drive(d, square(16, float(amplitudes[0])))
+
+
+def test_an_array_holding_nan_is_reused_until_it_changes():
+    q = _device().qudits[0]
+    amplitudes = np.array([0.2, np.nan])
+    first = reads_arrays_holding_nan.lower(q, amplitudes)
+    for _ in range(3):  # the last once the guard runs as generated code
+        assert reads_arrays_holding_nan.lower(q, amplitudes) is first
+    amplitudes[1] = 0.5
+    assert reads_arrays_holding_nan.lower(q, amplitudes) is not first
+    assert reads_arrays_holding_nan.cache_info().compiled == 2
+
+
 def test_a_trace_that_calls_an_impure_host_function_is_never_reused():
     @pulse.kernel
     def k(q):

@@ -32,7 +32,7 @@ from . import _bytecode_normalize as bc
 
 if TYPE_CHECKING:
     import threading
-    from collections.abc import Callable, Collection, Mapping
+    from collections.abc import Callable, Collection, Iterable, Mapping
     from typing import Any
 
     _Read = tuple[str, str, tuple[str, ...], bool]
@@ -44,13 +44,6 @@ if TYPE_CHECKING:
 
 _IMMUTABLE = (int, float, complex, str, bytes, bool, types.NoneType, range)
 _SNAPSHOT = (list, dict, set, bytearray)
-_CODE_LIKE = (
-    type,
-    types.ModuleType,
-    types.FunctionType,
-    types.MethodType,
-    types.BuiltinFunctionType,
-)
 _MAX_HELPER_DEPTH = 8
 
 
@@ -95,11 +88,16 @@ def _same_contents(value: Any, snapshot: Any) -> bool:
     if type(value) is not type(snapshot):
         return False
     if type(value).__name__ == "ndarray":
-        return bool(
-            value.shape == snapshot.shape
-            and value.dtype == snapshot.dtype
-            and (value == snapshot).all()
-        )
+        if value.shape != snapshot.shape or value.dtype != snapshot.dtype:
+            return False
+        if (value == snapshot).all():
+            return True
+        # NaN is not equal to itself: NaN in the same places is the same.
+        if value.dtype.kind not in "fc":
+            return False
+        import numpy
+
+        return bool(numpy.array_equal(value, snapshot, equal_nan=True))
     try:
         return bool(value == snapshot)
     except Exception:
@@ -355,7 +353,8 @@ def _attributes(value: Any) -> list[str]:
     cached for by identity: a dataclass's fields, else what its ``__dict__``
     holds; none for a class, module or function, or cudaq_pulse's own."""
     cls = type(value)
-    if isinstance(value, _CODE_LIKE) or cls.__module__.partition(".")[0] == "cudaq_pulse":
+    code = (type, types.ModuleType, types.FunctionType, types.MethodType, types.BuiltinFunctionType)
+    if isinstance(value, code) or cls.__module__.partition(".")[0] == "cudaq_pulse":
         return []
     fields = getattr(cls, "__dataclass_fields__", None)
     if fields is None:
@@ -365,13 +364,69 @@ def _attributes(value: Any) -> list[str]:
     return [name for name in fields if name.isidentifier() and not keyword.iskeyword(name)]
 
 
-def _pin(plan: list[tuple[Any, ...]], pinned: Collection[Any], registers: int) -> int:
-    """Append to *plan* the steps that compare the *pinned* arguments: each
-    as a global's value is compared, then by its attributes (``_attributes``).
-    Returns the number of registers the plan uses from then on."""
+def _argument_reads(code: types.CodeType, name: str) -> list[tuple[str, ...]] | None:
+    """The attribute chains *code* reads off its parameter *name*
+    (``p.amplitude``), or None when it uses the parameter otherwise: passes
+    it on, stores it or keeps it in a closure."""
+    if name in code.co_cellvars:
+        return None
+    try:
+        instrs = bc.decode(code).instrs
+    except Exception:
+        return None
+    other = (
+        bc.STORE_FAST,
+        bc.STORE_FAST_MAYBE,
+        bc.DELETE_FAST,
+        bc.LOAD_FAST_AND_CLEAR,
+        bc.LOAD_DEREF,
+        bc.STORE_DEREF,
+    )
+    chains: list[tuple[str, ...]] = []
+    for start, (op, arg) in enumerate(instrs):
+        if op == bc.LOAD_FAST and arg == name:
+            end = start + 1
+            while end < len(instrs) and instrs[end][0] == bc.LOAD_ATTR:
+                end += 1
+            if end == start + 1:
+                return None
+            chains.append(tuple(attr for _, attr in instrs[start + 1 : end]))
+        elif op in other and arg == name:
+            return None
+    return chains
+
+
+# Whether a read of *chain* off *value* meets a method, which may read any
+# attribute of its object.
+def _meets_method(value: Any, chain: tuple[str, ...]) -> bool:
+    for attr in chain:
+        try:
+            value = getattr(value, attr)
+        except Exception:
+            return False
+        if isinstance(value, (types.MethodType, types.BuiltinMethodType)):
+            return True
+    return False
+
+
+def pin_arguments(
+    guard: Guard, fn: types.FunctionType, pinned: Iterable[tuple[str | None, Any]]
+) -> Guard:
+    """*guard*, extended to compare the static arguments *pinned* that the
+    cache keys by the object itself, so a change in place is seen:
+    ``(parameter, value)``, or ``(None, value)`` for a value in a tuple, list
+    or dict argument. An array or a container is compared by a copy of its
+    contents, as a global is; an object by the attribute chains *fn* reads
+    off its parameter (``p.amplitude``), or by all its attributes
+    (``_attributes``) when *fn* uses it otherwise or calls a method of it.
+    """
+    if guard.impure:
+        return guard
+    plan = list(guard.plan)
+    registers = guard.registers
     seen: set[int] = set()
 
-    def pin(value: Any, source: int, a: Any, b: Any, depth: int) -> None:
+    def whole(value: Any, source: int, a: Any, b: Any, depth: int) -> None:
         nonlocal registers
         if _immutable(value):
             plan.append((source, a, b, -1, _EQUAL_VALUE, value, None))
@@ -398,11 +453,48 @@ def _pin(plan: list[tuple[Any, ...]], pinned: Collection[Any], registers: int) -
                 attribute = getattr(value, name)
             except Exception:
                 continue
-            pin(attribute, _ATTR, register, name, depth + 1)
+            whole(attribute, _ATTR, register, name, depth + 1)
 
-    for value in pinned:
-        pin(value, _GLOBAL, (value,), 0, 0)
-    return registers
+    for name, value in pinned:
+        reads = None
+        if name is not None and _attributes(value):
+            reads = _argument_reads(fn.__code__, name)
+        if reads is None or any(_meets_method(value, chain) for chain in reads):
+            whole(value, _GLOBAL, (value,), 0, 0)
+            continue
+        # The registers of the argument and of each attribute read off it
+        # that a longer chain reads on from.
+        parents: dict[tuple[str, ...], int] = {(): registers}
+        plan.append((_GLOBAL, (value,), 0, registers, _SAME_OBJECT, value, None))
+        registers += 1
+        for chain in dict.fromkeys(reads):
+            parent = value
+            for n, attr in enumerate(chain, start=1):
+                try:
+                    child = getattr(parent, attr)
+                except Exception:
+                    break
+                if n == len(chain):
+                    whole(child, _ATTR, parents[chain[: n - 1]], attr, 1)
+                elif chain[:n] not in parents:
+                    parents[chain[:n]] = registers
+                    registers += 1
+                    step = (_ATTR, parents[chain[: n - 1]], attr, parents[chain[:n]])
+                    plan.append((*step, _SAME_OBJECT, child, _snapshot(child)))
+                parent = child
+    pinned_guard = Guard(_always_false, guard.reads, False, tuple(plan), registers)
+    steps = pinned_guard.plan
+    ref = weakref.ref(pinned_guard)
+
+    def upgrade() -> Callable[[], bool]:
+        check = _generated(steps)
+        held = ref()
+        if held is not None:
+            held.check = check
+        return check
+
+    pinned_guard.check = _closures(steps, registers, upgrade)
+    return pinned_guard
 
 
 def build_guard(
@@ -411,7 +503,6 @@ def build_guard(
     impure: bool = False,
     dict_items: Mapping[tuple[int, Any], tuple[dict[Any, Any], Any, Any]] | None = None,
     dict_whole: Collection[int] = (),
-    pinned: Collection[Any] = (),
 ) -> Guard:
     """The guard for *fn*, from the values its reads have right now.
 
@@ -420,9 +511,6 @@ def build_guard(
     are the dict items the trace read, ``(id(dict), key) -> (dict, key,
     value)``, and *dict_whole* the ids of the dicts it iterated or tested
     with ``in``; without *dict_items* every dict is compared whole.
-    *pinned* are the arguments the trace's cache entry is kept for by
-    identity (a NumPy array, a dataclass): the guard compares a copy of
-    each one's contents, or its attributes, so a change in place is seen.
     """
     if impure:
         return Guard(_always_false, 0, True, (), 0)
@@ -552,10 +640,7 @@ def build_guard(
         else:
             snap = _item_snapshot(value) if item else _snapshot(value)
             plan.append((source, a, b, kept, _SAME_OBJECT, value, snap))
-    registers = max(parents, default=-1) + 1
-    if pinned:
-        registers = _pin(plan, pinned, registers)
-    guard = Guard(_always_false, len(slots), False, tuple(plan), registers)
+    guard = Guard(_always_false, len(slots), False, tuple(plan), max(parents, default=-1) + 1)
     steps = guard.plan
     ref = weakref.ref(guard)
 
